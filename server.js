@@ -1,6 +1,6 @@
 require("dotenv").config();
 const express = require("express");
-const cors = require("cors");+3
+const cors = require("cors");
 const db = require("./config/db");
 const setupRoutes = require("./routes/setupRoutes");
 const authRoutes = require("./routes/authRoutes");
@@ -11,7 +11,9 @@ const membershipRoutes = require("./routes/membershipRoutes");
 const bookingRoutes = require("./routes/bookingRoutes");
 const gameSessionRoutes = require("./routes/gameSessionRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
-
+const platformRoutes = require("./routes/platformRoutes");
+const gameTypeRoutes = require("./routes/gameTypeRoutes");
+const userRoutes = require("./routes/userRoutes");
 const app = express();
 
 //middleware
@@ -66,7 +68,9 @@ app.use("/api/booking", bookingRoutes);
 app.use("/api/game-session", gameSessionRoutes);
 
 app.use("/api/payments",paymentRoutes);
-
+app.use("/api/platforms", platformRoutes);
+app.use("/api/game-types", gameTypeRoutes);
+app.use("/api/users", userRoutes);
 const PORT = process.env.PORT || 5000;
 
 async function startServer(){

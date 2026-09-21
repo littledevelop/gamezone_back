@@ -225,26 +225,30 @@ const validateGamingStation = async (data, stationId = null) => {
 
     // MAINTENANCE DATE VALIDATION
     if (
-        maintenance_date !== undefined &&
-        maintenance_date !== null &&
-        maintenance_date !== ""
+    maintenance_date !== undefined &&
+    maintenance_date !== null &&
+    maintenance_date !== ""
+) {
+    if (
+        typeof maintenance_date !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(maintenance_date)
     ) {
-
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(maintenance_date)) {
-
-            return "maintenance_date must be in YYYY-MM-DD format";
-        }
-
-        const date = new Date(`${maintenance_date}T00:00:00`);
-
-        if (
-            Number.isNaN(date.getTime()) ||
-            date.toISOString().slice(0, 10) !== maintenance_date
-        ) {
-
-            return "maintenance_date is not a valid date";
-        }
+        return "maintenance_date must be in YYYY-MM-DD format";
     }
+
+    const [year, month, day] =
+        maintenance_date.split("-").map(Number);
+
+    const date = new Date(year, month - 1, day);
+
+    if (
+        date.getFullYear() !== year ||
+        date.getMonth() !== month - 1 ||
+        date.getDate() !== day
+    ) {
+        return "maintenance_date is not a valid date";
+    }
+}
 
 
     return null;

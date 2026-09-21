@@ -16,53 +16,316 @@ const isNonNegativeInteger = (value) => {
     return Number.isInteger(number) && number >= 0;
 };
 
-// CHECK MYSQL DATETIME FORMAT
-const isValidDateTime = (value) => {
+// =====================================================
+// DATE / TIME HELPERS
+// =====================================================
+
+// Supports:
+// YYYY-MM-DD HH:MM:SS
+// YYYY-MM-DDTHH:MM:SS
+// YYYY-MM-DDTHH:MM:SS.000Z
+// JavaScript Date object
+const parseDateTime = (value) => {
+
+    if (value instanceof Date) {
+        return Number.isNaN(value.getTime())
+            ? null
+            : value;
+    }
+
     if (typeof value !== "string") {
-        return false;
+        return null;
     }
 
-    // Expected format: YYYY-MM-DD HH:MM:SS
-    if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
-        return false;
+    const valueString = value.trim();
+
+    // MySQL DATETIME
+    const mysqlMatch = valueString.match(
+        /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/
+    );
+
+    if (mysqlMatch) {
+
+        const year = Number(mysqlMatch[1]);
+        const month = Number(mysqlMatch[2]);
+        const day = Number(mysqlMatch[3]);
+        const hour = Number(mysqlMatch[4]);
+        const minute = Number(mysqlMatch[5]);
+        const second = Number(mysqlMatch[6]);
+
+        const date = new Date(
+            Date.UTC(
+                year,
+                month - 1,
+                day,
+                hour,
+                minute,
+                second
+            )
+        );
+
+        if (Number.isNaN(date.getTime())) {
+            return null;
+        }
+
+        if (
+            date.getUTCFullYear() !== year ||
+            date.getUTCMonth() !== month - 1 ||
+            date.getUTCDate() !== day ||
+            date.getUTCHours() !== hour ||
+            date.getUTCMinutes() !== minute ||
+            date.getUTCSeconds() !== second
+        ) {
+            return null;
+        }
+
+        return date;
     }
 
-    const date = new Date(value.replace(" ", "T"));
+    // ISO format
+    if (
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(valueString) ||
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(valueString)
+    ) {
 
-    return !Number.isNaN(date.getTime());
+        const date = new Date(valueString);
+
+        if (Number.isNaN(date.getTime())) {
+            return null;
+        }
+
+        return date;
+    }
+
+    return null;
 };
 
-// CALCULATE DURATION IN MINUTES
-const calculateDuration = (startTime, endTime) => {
-    const start = new Date(startTime.replace(" ", "T"));
-    const end = new Date(endTime.replace(" ", "T"));
+// VALIDATE DATE/TIME
+const isValidDateTime = (value) => {
+    return parseDateTime(value) !== null;
+};
 
-    const difference = end - start;
+// NORMALIZE DATE/TIME FOR MYSQL
+const normalizeDateTimeForDb = (value) => {
+
+    if (
+        value === null ||
+        value === undefined ||
+        value === ""
+    ) {
+        return null;
+    }
+
+    // Already MySQL DATETIME
+    if (
+        typeof value === "string" &&
+        /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(
+            value.trim()
+        )
+    ) {
+        return value.trim();
+    }
+
+    const date = parseDateTime(value);
+
+    if (!date) {
+        return null;
+    }
+
+    const pad = (number) =>
+        String(number).padStart(2, "0");
+
+    return (
+        `${date.getUTCFullYear()}-` +
+        `${pad(date.getUTCMonth() + 1)}-` +
+        `${pad(date.getUTCDate())} ` +
+        `${pad(date.getUTCHours())}:` +
+        `${pad(date.getUTCMinutes())}:` +
+        `${pad(date.getUTCSeconds())}`
+    );
+};
+
+// CALCULATE DURATION
+const calculateDuration = (
+    startTime,
+    endTime
+) => {
+
+    const start = parseDateTime(startTime);
+    const end = parseDateTime(endTime);
+
+    if (!start || !end) {
+        return null;
+    }
+
+    const difference =
+        end.getTime() - start.getTime();
 
     if (difference < 0) {
         return null;
     }
 
-    return Math.round(difference / (1000 * 60));
+    return Math.round(
+        difference / (1000 * 60)
+    );
 };
 
+// =====================================================
+// BOOKING HELPERS
+// =====================================================
+
+// FIND MATCHING BOOKING
+//
+// This allows the current database structure to work
+// without adding booking_id to game_sessions.
+//
+// Priority:
+// 1. Exact booking_id when supplied.
+// 2. Otherwise match by:
+//    user + game + station + booking date + time
+// =====================================================
+
+const findMatchingBooking = async (
+    connection,
+    {
+        booking_id,
+        user_id,
+        game_id,
+        station_id,
+        start_time
+    }
+) => {
+
+    const bookingDate =
+        String(start_time).substring(0, 10);
+
+    const bookingStartTime =
+        String(start_time).substring(11, 19);
+
+    // -------------------------------------------------
+    // EXACT BOOKING
+    // -------------------------------------------------
+
+    if (
+        booking_id !== undefined &&
+        booking_id !== null &&
+        booking_id !== ""
+    ) {
+
+        const [bookings] =
+            await connection.query(
+                `
+                SELECT
+                    id,
+                    user_id,
+                    membership_id,
+                    game_id,
+                    station_id,
+                    booking_date,
+                    start_time,
+                    end_time,
+                    status,
+                    payment_status,
+                    amount
+                FROM bookings
+                WHERE id = ?
+                LIMIT 1
+                `,
+                [Number(booking_id)]
+            );
+
+        if (bookings.length === 0) {
+            return null;
+        }
+
+        const booking = bookings[0];
+
+        if (
+            Number(booking.user_id) !== Number(user_id) ||
+            Number(booking.game_id) !== Number(game_id) ||
+            Number(booking.station_id) !== Number(station_id)
+        ) {
+            return null;
+        }
+
+        if (
+            !["pending", "confirmed"]
+                .includes(booking.status)
+        ) {
+            return null;
+        }
+
+        return booking;
+    }
+
+    // -------------------------------------------------
+    // AUTOMATIC BOOKING MATCH
+    // -------------------------------------------------
+
+    const [bookings] =
+        await connection.query(
+            `
+            SELECT
+                id,
+                user_id,
+                membership_id,
+                game_id,
+                station_id,
+                booking_date,
+                start_time,
+                end_time,
+                status,
+                payment_status,
+                amount
+            FROM bookings
+            WHERE user_id = ?
+              AND game_id = ?
+              AND station_id = ?
+              AND booking_date = ?
+              AND status IN ('pending', 'confirmed')
+              AND start_time <= ?
+              AND end_time > ?
+            ORDER BY id DESC
+            LIMIT 1
+            `,
+            [
+                Number(user_id),
+                Number(game_id),
+                Number(station_id),
+                bookingDate,
+                bookingStartTime,
+                bookingStartTime
+            ]
+        );
+
+    return bookings.length > 0
+        ? bookings[0]
+        : null;
+};
 
 // =====================================================
 // GET ALL GAME SESSIONS
 // =====================================================
 
-const getAllGameSessions = async (req, res) => {
+const getAllGameSessions = async (
+    req,
+    res
+) => {
+
     try {
 
-        const [gameSessions] = await db.query(`
+        let query = `
             SELECT
                 gs.id,
                 gs.user_id,
                 u.full_name AS user_name,
+
                 gs.game_id,
                 g.game_name,
+
                 gs.station_id,
                 st.station_name,
+
                 gs.start_time,
                 gs.end_time,
                 gs.duration_minutes,
@@ -73,6 +336,7 @@ const getAllGameSessions = async (req, res) => {
                 gs.notes,
                 gs.created_at,
                 gs.updated_at
+
             FROM game_sessions gs
 
             INNER JOIN users u
@@ -83,9 +347,32 @@ const getAllGameSessions = async (req, res) => {
 
             INNER JOIN gaming_stations st
                 ON gs.station_id = st.id
+        `;
 
+        const queryParams = [];
+
+        // Player sees only own sessions
+        if (
+            req.user &&
+            req.user.role_name === "Player"
+        ) {
+
+            query += `
+                WHERE gs.user_id = ?
+            `;
+
+            queryParams.push(req.user.id);
+        }
+
+        query += `
             ORDER BY gs.id DESC
-        `);
+        `;
+
+        const [gameSessions] =
+            await db.query(
+                query,
+                queryParams
+            );
 
         return res.status(200).json({
             success: true,
@@ -94,41 +381,53 @@ const getAllGameSessions = async (req, res) => {
 
     } catch (error) {
 
-        console.log("Get Game Sessions Error:", error.message);
+        console.log(
+            "Get Game Sessions Error:",
+            error.message
+        );
 
         return res.status(500).json({
             success: false,
-            message: "Server error while fetching game sessions"
+            message:
+                "Server error while fetching game sessions"
         });
     }
 };
-
 
 // =====================================================
 // GET GAME SESSION BY ID
 // =====================================================
 
-const getGameSessionById = async (req, res) => {
+const getGameSessionById = async (
+    req,
+    res
+) => {
+
     try {
 
         const { id } = req.params;
 
         if (!isPositiveInteger(id)) {
+
             return res.status(400).json({
                 success: false,
-                message: "Invalid Game Session ID"
+                message:
+                    "Invalid Game Session ID"
             });
         }
 
-        const [gameSessions] = await db.query(`
+        let query = `
             SELECT
                 gs.id,
                 gs.user_id,
                 u.full_name AS user_name,
+
                 gs.game_id,
                 g.game_name,
+
                 gs.station_id,
                 st.station_name,
+
                 gs.start_time,
                 gs.end_time,
                 gs.duration_minutes,
@@ -139,6 +438,7 @@ const getGameSessionById = async (req, res) => {
                 gs.notes,
                 gs.created_at,
                 gs.updated_at
+
             FROM game_sessions gs
 
             INNER JOIN users u
@@ -151,12 +451,35 @@ const getGameSessionById = async (req, res) => {
                 ON gs.station_id = st.id
 
             WHERE gs.id = ?
-        `, [Number(id)]);
+        `;
+
+        const queryParams = [Number(id)];
+
+        // Player can view only own session
+        if (
+            req.user &&
+            req.user.role_name === "Player"
+        ) {
+
+            query += `
+                AND gs.user_id = ?
+            `;
+
+            queryParams.push(req.user.id);
+        }
+
+        const [gameSessions] =
+            await db.query(
+                query,
+                queryParams
+            );
 
         if (gameSessions.length === 0) {
+
             return res.status(404).json({
                 success: false,
-                message: "Game Session Not Found"
+                message:
+                    "Game Session Not Found"
             });
         }
 
@@ -167,21 +490,26 @@ const getGameSessionById = async (req, res) => {
 
     } catch (error) {
 
-        console.log("Get Game Session By ID Error:", error.message);
+        console.log(
+            "Get Game Session By ID Error:",
+            error.message
+        );
 
         return res.status(500).json({
             success: false,
-            message: "Server error while fetching game session"
+            message:
+                "Server error while fetching game session"
         });
     }
 };
-
 
 // =====================================================
 // VALIDATE GAME SESSION DATA
 // =====================================================
 
-const validateGameSession = async (data) => {
+const validateGameSession = async (
+    data
+) => {
 
     const {
         user_id,
@@ -197,12 +525,15 @@ const validateGameSession = async (data) => {
         notes
     } = data;
 
-
     // -------------------------------------------------
-    // USER VALIDATION
+    // USER
     // -------------------------------------------------
 
-    if (user_id !== undefined && user_id !== null) {
+    if (
+        user_id !== undefined &&
+        user_id !== null &&
+        user_id !== ""
+    ) {
 
         const userId = Number(user_id);
 
@@ -210,26 +541,33 @@ const validateGameSession = async (data) => {
             return "Invalid User ID";
         }
 
-        const [users] = await db.query(`
-            SELECT u.id
-            FROM users u
-            INNER JOIN roles r
-                ON u.role_id = r.id
-            WHERE u.id = ?
-            AND r.role_name = 'Player'
-        `, [userId]);
+        const [users] =
+            await db.query(
+                `
+                SELECT u.id
+                FROM users u
+                INNER JOIN roles r
+                    ON u.role_id = r.id
+                WHERE u.id = ?
+                  AND r.role_name = 'Player'
+                `,
+                [userId]
+            );
 
         if (users.length === 0) {
             return "user_id does not exist or is not a Player";
         }
     }
 
-
     // -------------------------------------------------
-    // GAME VALIDATION
+    // GAME
     // -------------------------------------------------
 
-    if (game_id !== undefined && game_id !== null) {
+    if (
+        game_id !== undefined &&
+        game_id !== null &&
+        game_id !== ""
+    ) {
 
         const gameId = Number(game_id);
 
@@ -237,68 +575,98 @@ const validateGameSession = async (data) => {
             return "Invalid Game ID";
         }
 
-        const [games] = await db.query(`
-            SELECT id
-            FROM games
-            WHERE id = ?
-        `, [gameId]);
+        const [games] =
+            await db.query(
+                `
+                SELECT id, status
+                FROM games
+                WHERE id = ?
+                `,
+                [gameId]
+            );
 
         if (games.length === 0) {
             return "Invalid Game";
         }
+
+        if (games[0].status !== "active") {
+            return "Selected game is inactive";
+        }
     }
 
-
     // -------------------------------------------------
-    // GAMING STATION VALIDATION
+    // STATION
     // -------------------------------------------------
 
-    if (station_id !== undefined && station_id !== null) {
+    if (
+        station_id !== undefined &&
+        station_id !== null &&
+        station_id !== ""
+    ) {
 
-        const stationId = Number(station_id);
+        const stationId =
+            Number(station_id);
 
         if (!isPositiveInteger(stationId)) {
             return "Invalid Gaming Station ID";
         }
 
-        const [stations] = await db.query(`
-            SELECT id
-            FROM gaming_stations
-            WHERE id = ?
-        `, [stationId]);
+        const [stations] =
+            await db.query(
+                `
+                SELECT
+                    id,
+                    status
+                FROM gaming_stations
+                WHERE id = ?
+                `,
+                [stationId]
+            );
 
         if (stations.length === 0) {
             return "Invalid Gaming Station";
         }
+
+        if (
+            ["maintenance", "inactive"]
+                .includes(stations[0].status)
+        ) {
+            return "Selected gaming station is unavailable";
+        }
     }
 
-
     // -------------------------------------------------
-    // START TIME VALIDATION
+    // START TIME
     // -------------------------------------------------
 
-    if (start_time !== undefined && start_time !== null) {
+    if (
+        start_time !== undefined &&
+        start_time !== null &&
+        start_time !== ""
+    ) {
 
         if (!isValidDateTime(start_time)) {
-            return "Start time must be in YYYY-MM-DD HH:MM:SS format";
+            return "Start time must be a valid date and time";
         }
     }
 
-
     // -------------------------------------------------
-    // END TIME VALIDATION
+    // END TIME
     // -------------------------------------------------
 
-    if (end_time !== undefined && end_time !== null && end_time !== "") {
+    if (
+        end_time !== undefined &&
+        end_time !== null &&
+        end_time !== ""
+    ) {
 
         if (!isValidDateTime(end_time)) {
-            return "End time must be in YYYY-MM-DD HH:MM:SS format";
+            return "End time must be a valid date and time";
         }
     }
 
-
     // -------------------------------------------------
-    // DURATION VALIDATION
+    // DURATION
     // -------------------------------------------------
 
     if (
@@ -307,14 +675,17 @@ const validateGameSession = async (data) => {
         duration_minutes !== ""
     ) {
 
-        if (!isNonNegativeInteger(duration_minutes)) {
+        if (
+            !isNonNegativeInteger(
+                duration_minutes
+            )
+        ) {
             return "Duration must be a non-negative integer";
         }
     }
 
-
     // -------------------------------------------------
-    // AMOUNT VALIDATION
+    // AMOUNT
     // -------------------------------------------------
 
     if (
@@ -323,7 +694,8 @@ const validateGameSession = async (data) => {
         amount !== ""
     ) {
 
-        const numericAmount = Number(amount);
+        const numericAmount =
+            Number(amount);
 
         if (
             !Number.isFinite(numericAmount) ||
@@ -332,51 +704,62 @@ const validateGameSession = async (data) => {
             return "Amount must be a valid non-negative number";
         }
 
-        // DECIMAL(10,2)
-        if (numericAmount > 99999999.99) {
+        if (
+            numericAmount > 99999999.99
+        ) {
             return "Amount is too large";
         }
 
         if (
-            Math.round(numericAmount * 100) !==
-            numericAmount * 100
+            Math.round(
+                numericAmount * 100
+            ) !== numericAmount * 100
         ) {
             return "Amount can have maximum 2 decimal places";
         }
     }
 
-
     // -------------------------------------------------
-    // STATUS VALIDATION
+    // STATUS
     // -------------------------------------------------
 
-    if (status !== undefined && status !== null) {
+    if (
+        status !== undefined &&
+        status !== null &&
+        status !== ""
+    ) {
 
-        const normalizedStatus = String(status).trim().toLowerCase();
+        const normalizedStatus =
+            String(status)
+                .trim()
+                .toLowerCase();
 
         if (
-            !["active", "completed", "cancelled"]
-                .includes(normalizedStatus)
+            ![
+                "active",
+                "completed",
+                "cancelled"
+            ].includes(normalizedStatus)
         ) {
             return "Status must be active, completed or cancelled";
         }
     }
 
-
     // -------------------------------------------------
-    // RECORDING STATUS VALIDATION
+    // RECORDING STATUS
     // -------------------------------------------------
 
     if (
         recording_status !== undefined &&
-        recording_status !== null
+        recording_status !== null &&
+        recording_status !== ""
     ) {
 
         const normalizedRecordingStatus =
-            String(recording_status).trim().toLowerCase();
+            String(recording_status)
+                .trim()
+                .toLowerCase();
 
-        // Known values from the database structure.
-        // The fourth enum value is intentionally not assumed here.
         const validRecordingStatuses = [
             "not_recorded",
             "recording",
@@ -384,16 +767,16 @@ const validateGameSession = async (data) => {
         ];
 
         if (
-            !validRecordingStatuses
-                .includes(normalizedRecordingStatus)
+            !validRecordingStatuses.includes(
+                normalizedRecordingStatus
+            )
         ) {
             return "Invalid recording status";
         }
     }
 
-
     // -------------------------------------------------
-    // VIDEO FILE ID VALIDATION
+    // VIDEO FILE ID
     // -------------------------------------------------
 
     if (
@@ -401,41 +784,50 @@ const validateGameSession = async (data) => {
         video_file_id !== null
     ) {
 
-        const videoFileId = String(video_file_id).trim();
-
-        if (videoFileId.length > 255) {
+        if (
+            String(video_file_id)
+                .trim()
+                .length > 255
+        ) {
             return "Video file ID cannot exceed 255 characters";
         }
     }
 
-
     // -------------------------------------------------
-    // NOTES VALIDATION
+    // NOTES
     // -------------------------------------------------
 
-    if (notes !== undefined && notes !== null) {
+    if (
+        notes !== undefined &&
+        notes !== null
+    ) {
 
         if (typeof notes !== "string") {
             return "Notes must be text";
         }
     }
 
-
     return null;
 };
-
 
 // =====================================================
 // CREATE GAME SESSION
 // =====================================================
 
-const createGameSession = async (req, res) => {
+const createGameSession = async (
+    req,
+    res
+) => {
+
+    let connection;
+
     try {
 
         const {
             user_id,
             game_id,
             station_id,
+            booking_id,
             start_time,
             end_time,
             duration_minutes,
@@ -446,9 +838,8 @@ const createGameSession = async (req, res) => {
             notes
         } = req.body;
 
-
         // -------------------------------------------------
-        // REQUIRED FIELD VALIDATION
+        // REQUIRED
         // -------------------------------------------------
 
         if (
@@ -480,7 +871,8 @@ const createGameSession = async (req, res) => {
         ) {
             return res.status(400).json({
                 success: false,
-                message: "Gaming Station ID is required"
+                message:
+                    "Gaming Station ID is required"
             });
         }
 
@@ -495,14 +887,12 @@ const createGameSession = async (req, res) => {
             });
         }
 
-
         // -------------------------------------------------
-        // VALIDATE DATA
+        // VALIDATE
         // -------------------------------------------------
 
-        const validationError = await validateGameSession(
-            req.body
-        );
+        const validationError =
+            await validateGameSession(req.body);
 
         if (validationError) {
             return res.status(400).json({
@@ -510,11 +900,6 @@ const createGameSession = async (req, res) => {
                 message: validationError
             });
         }
-
-
-        // -------------------------------------------------
-        // NORMALIZE DATA
-        // -------------------------------------------------
 
         const userId = Number(user_id);
         const gameId = Number(game_id);
@@ -524,169 +909,320 @@ const createGameSession = async (req, res) => {
             status !== undefined &&
             status !== null &&
             status !== ""
-                ? String(status).trim().toLowerCase()
+                ? String(status)
+                    .trim()
+                    .toLowerCase()
                 : "active";
+
+        // We only allow new sessions to start active.
+        if (sessionStatus !== "active") {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "New game sessions must start with active status"
+            });
+        }
 
         const sessionRecordingStatus =
             recording_status !== undefined &&
             recording_status !== null &&
             recording_status !== ""
-                ? String(recording_status).trim().toLowerCase()
+                ? String(recording_status)
+                    .trim()
+                    .toLowerCase()
                 : "not_recorded";
+
+        const normalizedStartTime =
+            normalizeDateTimeForDb(
+                start_time
+            );
 
         const normalizedEndTime =
             end_time === undefined ||
+            end_time === null ||
             end_time === ""
                 ? null
-                : end_time;
-
-        const normalizedVideoFileId =
-            video_file_id === undefined ||
-            video_file_id === ""
-                ? null
-                : String(video_file_id).trim();
-
-        const normalizedNotes =
-            notes === undefined ||
-            notes === ""
-                ? null
-                : notes;
-
-
-        // -------------------------------------------------
-        // END TIME MUST BE AFTER START TIME
-        // -------------------------------------------------
-
-        if (normalizedEndTime) {
-
-            const duration =
-                calculateDuration(
-                    start_time,
-                    normalizedEndTime
+                : normalizeDateTimeForDb(
+                    end_time
                 );
 
-            if (duration === null) {
+        if (!normalizedStartTime) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid start time"
+            });
+        }
+
+        if (normalizedEndTime) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Active session cannot have end time"
+            });
+        }
+
+        // -------------------------------------------------
+        // TRANSACTION
+        // -------------------------------------------------
+
+        connection = await db.getConnection();
+
+        await connection.beginTransaction();
+
+        // -------------------------------------------------
+        // LOCK STATION
+        // -------------------------------------------------
+
+        const [stations] =
+            await connection.query(
+                `
+                SELECT
+                    id,
+                    station_name,
+                    status,
+                    current_player_id
+                FROM gaming_stations
+                WHERE id = ?
+                FOR UPDATE
+                `,
+                [stationId]
+            );
+
+        if (stations.length === 0) {
+
+            await connection.rollback();
+
+            return res.status(404).json({
+                success: false,
+                message:
+                    "Gaming Station Not Found"
+            });
+        }
+
+        const station = stations[0];
+
+        if (
+            station.status === "maintenance" ||
+            station.status === "inactive"
+        ) {
+
+            await connection.rollback();
+
+            return res.status(409).json({
+                success: false,
+                message:
+                    "Gaming station is currently unavailable"
+            });
+        }
+
+        if (station.status === "occupied") {
+
+            await connection.rollback();
+
+            return res.status(409).json({
+                success: false,
+                message:
+                    "Gaming station is already occupied"
+            });
+        }
+
+        // -------------------------------------------------
+        // CHECK ACTIVE SESSION ON STATION
+        // -------------------------------------------------
+
+        const [activeSessions] =
+            await connection.query(
+                `
+                SELECT id
+                FROM game_sessions
+                WHERE station_id = ?
+                  AND status = 'active'
+                LIMIT 1
+                FOR UPDATE
+                `,
+                [stationId]
+            );
+
+        if (activeSessions.length > 0) {
+
+            await connection.rollback();
+
+            return res.status(409).json({
+                success: false,
+                message:
+                    "Gaming station already has an active game session"
+            });
+        }
+
+        // -------------------------------------------------
+        // FIND BOOKING
+        // -------------------------------------------------
+
+        const booking =
+            await findMatchingBooking(
+                connection,
+                {
+                    booking_id,
+                    user_id: userId,
+                    game_id: gameId,
+                    station_id: stationId,
+                    start_time:
+                        normalizedStartTime
+                }
+            );
+
+        // If booking_id was explicitly provided,
+        // it must be valid.
+        if (
+            booking_id !== undefined &&
+            booking_id !== null &&
+            booking_id !== ""
+        ) {
+
+            if (!booking) {
+
+                await connection.rollback();
+
                 return res.status(400).json({
                     success: false,
-                    message: "End time must be greater than or equal to start time"
+                    message:
+                        "Selected booking does not match this player, game or gaming station"
                 });
             }
         }
 
+        // -------------------------------------------------
+        // INSERT SESSION
+        // -------------------------------------------------
+
+        const [result] =
+            await connection.query(
+                `
+                INSERT INTO game_sessions (
+                    user_id,
+                    game_id,
+                    station_id,
+                    start_time,
+                    end_time,
+                    duration_minutes,
+                    amount,
+                    status,
+                    recording_status,
+                    video_file_id,
+                    notes
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `,
+                [
+                    userId,
+                    gameId,
+                    stationId,
+                    normalizedStartTime,
+                    null,
+                    null,
+                    amount !== undefined &&
+                    amount !== null &&
+                    amount !== ""
+                        ? Number(amount)
+                        : booking
+                            ? Number(booking.amount || 0)
+                            : 0,
+                    "active",
+                    sessionRecordingStatus,
+                    video_file_id !== undefined &&
+                    video_file_id !== null &&
+                    video_file_id !== ""
+                        ? String(video_file_id).trim()
+                        : null,
+                    notes !== undefined &&
+                    notes !== null &&
+                    notes !== ""
+                        ? notes
+                        : null
+                ]
+            );
 
         // -------------------------------------------------
-        // COMPLETED SESSION MUST HAVE END TIME
+        // OCCUPY STATION
+        // -------------------------------------------------
+
+        await connection.query(
+            `
+            UPDATE gaming_stations
+            SET
+                status = 'occupied',
+                current_player_id = ?
+            WHERE id = ?
+            `,
+            [userId, stationId]
+        );
+
+        // -------------------------------------------------
+        // PENDING BOOKING -> CONFIRMED
         // -------------------------------------------------
 
         if (
-            sessionStatus === "completed" &&
-            !normalizedEndTime
+            booking &&
+            booking.status === "pending"
         ) {
-            return res.status(400).json({
-                success: false,
-                message: "Completed session must have end time"
-            });
-        }
 
-
-        // -------------------------------------------------
-        // ACTIVE SESSION SHOULD NOT HAVE END TIME
-        // -------------------------------------------------
-
-        if (
-            sessionStatus === "active" &&
-            normalizedEndTime
-        ) {
-            return res.status(400).json({
-                success: false,
-                message: "Active session cannot have end time"
-            });
-        }
-
-
-        // -------------------------------------------------
-        // AUTO CALCULATE DURATION
-        // -------------------------------------------------
-
-        let finalDuration =
-            duration_minutes !== undefined &&
-            duration_minutes !== null &&
-            duration_minutes !== ""
-                ? Number(duration_minutes)
-                : null;
-
-        if (
-            finalDuration === null &&
-            normalizedEndTime
-        ) {
-            finalDuration = calculateDuration(
-                start_time,
-                normalizedEndTime
+            await connection.query(
+                `
+                UPDATE bookings
+                SET status = 'confirmed'
+                WHERE id = ?
+                `,
+                [booking.id]
             );
         }
 
-
-        // -------------------------------------------------
-        // INSERT GAME SESSION
-        // -------------------------------------------------
-
-        const [result] = await db.query(`
-            INSERT INTO game_sessions (
-                user_id,
-                game_id,
-                station_id,
-                start_time,
-                end_time,
-                duration_minutes,
-                amount,
-                status,
-                recording_status,
-                video_file_id,
-                notes
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [
-            userId,
-            gameId,
-            stationId,
-            start_time,
-            normalizedEndTime,
-            finalDuration,
-            amount !== undefined &&
-            amount !== null &&
-            amount !== ""
-                ? Number(amount)
-                : 0,
-            sessionStatus,
-            sessionRecordingStatus,
-            normalizedVideoFileId,
-            normalizedNotes
-        ]);
-
+        await connection.commit();
 
         return res.status(201).json({
             success: true,
-            message: "Game Session Created Successfully",
-            gameSession_id: result.insertId
+            message:
+                "Game Session Created Successfully",
+            gameSession_id: result.insertId,
+            booking_id:
+                booking ? booking.id : null
         });
 
     } catch (error) {
 
-        console.log("Create Game Session Error:", error.message);
+        if (connection) {
+            await connection.rollback();
+        }
+
+        console.log(
+            "Create Game Session Error:",
+            error.message
+        );
 
         return res.status(500).json({
             success: false,
-            message: "Server error while creating game session"
+            message:
+                "Server error while creating game session"
         });
+
+    } finally {
+
+        if (connection) {
+            connection.release();
+        }
     }
 };
-
 
 // =====================================================
 // UPDATE GAME SESSION
 // =====================================================
 
-const updateGameSession = async (req, res) => {
+const updateGameSession = async (
+    req,
+    res
+) => {
+
+    let connection;
+
     try {
 
         const { id } = req.params;
@@ -694,66 +1230,131 @@ const updateGameSession = async (req, res) => {
         if (!isPositiveInteger(id)) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid Game Session ID"
+                message:
+                    "Invalid Game Session ID"
+            });
+        }
+
+        // -------------------------------------------------
+        // ONLY ADMIN / STAFF MAY MODIFY
+        // -------------------------------------------------
+
+        if (
+            req.user &&
+            req.user.role_name === "Player"
+        ) {
+            return res.status(403).json({
+                success: false,
+                message:
+                    "Players cannot update game sessions"
             });
         }
 
         const sessionId = Number(id);
 
+        connection = await db.getConnection();
+
+        await connection.beginTransaction();
 
         // -------------------------------------------------
-        // CHECK SESSION EXISTS
+        // GET EXISTING SESSION
+        // DATE_FORMAT prevents MySQL Date object
+        // problems during validation.
         // -------------------------------------------------
 
-        const [existingSessions] = await db.query(`
-            SELECT *
-            FROM game_sessions
-            WHERE id = ?
-        `, [sessionId]);
+        const [existingSessions] =
+            await connection.query(
+                `
+                SELECT
+                    id,
+                    user_id,
+                    game_id,
+                    station_id,
+
+                    DATE_FORMAT(
+                        start_time,
+                        '%Y-%m-%d %H:%i:%s'
+                    ) AS start_time,
+
+                    DATE_FORMAT(
+                        end_time,
+                        '%Y-%m-%d %H:%i:%s'
+                    ) AS end_time,
+
+                    duration_minutes,
+                    amount,
+                    status,
+                    recording_status,
+                    video_file_id,
+                    notes
+
+                FROM game_sessions
+
+                WHERE id = ?
+
+                FOR UPDATE
+                `,
+                [sessionId]
+            );
 
         if (existingSessions.length === 0) {
+
+            await connection.rollback();
+
             return res.status(404).json({
                 success: false,
-                message: "Game Session Not Found"
+                message:
+                    "Game Session Not Found"
             });
         }
 
-        const existingSession = existingSessions[0];
-
+        const existingSession =
+            existingSessions[0];
 
         // -------------------------------------------------
-        // VALIDATE REQUEST DATA
+        // VALIDATE ONLY REQUEST DATA
         // -------------------------------------------------
 
-        const validationError = await validateGameSession(
-            req.body
-        );
+        const validationError =
+            await validateGameSession(req.body);
 
         if (validationError) {
+
+            await connection.rollback();
+
             return res.status(400).json({
                 success: false,
                 message: validationError
             });
         }
 
-
         // -------------------------------------------------
-        // GET EFFECTIVE VALUES
+        // EFFECTIVE VALUES
         // -------------------------------------------------
 
-        const effectiveStartTime =
+        const rawStartTime =
             req.body.start_time !== undefined
                 ? req.body.start_time
                 : existingSession.start_time;
 
-        const effectiveEndTime =
+        const rawEndTime =
             req.body.end_time !== undefined
-                ? (
-                    req.body.end_time === ""
-                        ? null
-                        : req.body.end_time
-                )
+                ? req.body.end_time
                 : existingSession.end_time;
+
+        const effectiveStartTime =
+            normalizeDateTimeForDb(
+                rawStartTime
+            );
+
+        const effectiveEndTime =
+            rawEndTime === null ||
+            rawEndTime === undefined ||
+            rawEndTime === ""
+                ? null
+                : normalizeDateTimeForDb(
+                    rawEndTime
+                );
 
         const effectiveStatus =
             req.body.status !== undefined
@@ -762,61 +1363,146 @@ const updateGameSession = async (req, res) => {
                     .toLowerCase()
                 : existingSession.status;
 
-
         // -------------------------------------------------
-        // VALIDATE EFFECTIVE DATE/TIME
+        // VALIDATE EFFECTIVE VALUES
         // -------------------------------------------------
 
-        if (!isValidDateTime(effectiveStartTime)) {
+        if (!effectiveStartTime) {
+
+            await connection.rollback();
+
             return res.status(400).json({
                 success: false,
-                message: "Start time must be in YYYY-MM-DD HH:MM:SS format"
+                message: "Invalid start time"
             });
         }
 
         if (
-            effectiveEndTime &&
-            !isValidDateTime(effectiveEndTime)
+            effectiveEndTime !== null &&
+            !effectiveEndTime
         ) {
+
+            await connection.rollback();
+
             return res.status(400).json({
                 success: false,
-                message: "End time must be in YYYY-MM-DD HH:MM:SS format"
+                message: "Invalid end time"
             });
         }
 
+        // -------------------------------------------------
+        // COMPLETED/CANCELLED SESSIONS
+        // CANNOT BE REACTIVATED
+        // -------------------------------------------------
+
+        if (
+            existingSession.status !== "active" &&
+            effectiveStatus === "active"
+        ) {
+
+            await connection.rollback();
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Completed or cancelled session cannot be reactivated"
+            });
+        }
 
         // -------------------------------------------------
-        // END TIME CHECK
+        // ACTIVE SESSION
+        // PLAYER/GAME/STATION SHOULD NOT CHANGE
         // -------------------------------------------------
+
+        if (existingSession.status === "active") {
+
+            if (
+                req.body.user_id !== undefined &&
+                Number(req.body.user_id) !==
+                    Number(existingSession.user_id)
+            ) {
+
+                await connection.rollback();
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Player cannot be changed while session is active"
+                });
+            }
+
+            if (
+                req.body.game_id !== undefined &&
+                Number(req.body.game_id) !==
+                    Number(existingSession.game_id)
+            ) {
+
+                await connection.rollback();
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Game cannot be changed while session is active"
+                });
+            }
+
+            if (
+                req.body.station_id !== undefined &&
+                Number(req.body.station_id) !==
+                    Number(existingSession.station_id)
+            ) {
+
+                await connection.rollback();
+
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Gaming station cannot be changed while session is active"
+                });
+            }
+        }
+
+        // -------------------------------------------------
+        // END TIME / DURATION
+        // -------------------------------------------------
+
+        let calculatedDuration = null;
 
         if (effectiveEndTime) {
 
-            const duration =
+            calculatedDuration =
                 calculateDuration(
                     effectiveStartTime,
                     effectiveEndTime
                 );
 
-            if (duration === null) {
+            if (calculatedDuration === null) {
+
+                await connection.rollback();
+
                 return res.status(400).json({
                     success: false,
-                    message: "End time must be greater than or equal to start time"
+                    message:
+                        "End time must be greater than or equal to start time"
                 });
             }
         }
 
-
         // -------------------------------------------------
-        // STATUS BUSINESS RULES
+        // STATUS RULES
         // -------------------------------------------------
 
         if (
             effectiveStatus === "completed" &&
             !effectiveEndTime
         ) {
+
+            await connection.rollback();
+
             return res.status(400).json({
                 success: false,
-                message: "Completed session must have end time"
+                message:
+                    "Completed session must have end time"
             });
         }
 
@@ -824,15 +1510,18 @@ const updateGameSession = async (req, res) => {
             effectiveStatus === "active" &&
             effectiveEndTime
         ) {
+
+            await connection.rollback();
+
             return res.status(400).json({
                 success: false,
-                message: "Active session cannot have end time"
+                message:
+                    "Active session cannot have end time"
             });
         }
 
-
         // -------------------------------------------------
-        // ALLOWED FIELDS
+        // BUILD UPDATE
         // -------------------------------------------------
 
         const allowedFields = [
@@ -852,177 +1541,336 @@ const updateGameSession = async (req, res) => {
         const updateFields = [];
         const updateValues = [];
 
-
-        // -------------------------------------------------
-        // BUILD DYNAMIC UPDATE
-        // -------------------------------------------------
-
-        allowedFields.forEach((field) => {
+        for (
+            const field of allowedFields
+        ) {
 
             if (
-                Object.prototype.hasOwnProperty.call(
+                !Object.prototype.hasOwnProperty.call(
                     req.body,
                     field
                 )
             ) {
-
-                let value = req.body[field];
-
-                // NORMALIZE IDs
-                if (
-                    field === "user_id" ||
-                    field === "game_id" ||
-                    field === "station_id"
-                ) {
-                    value = Number(value);
-                }
-
-                // NORMALIZE STATUS
-                if (
-                    field === "status" ||
-                    field === "recording_status"
-                ) {
-                    value = String(value)
-                        .trim()
-                        .toLowerCase();
-                }
-
-                // NORMALIZE VIDEO FILE ID
-                if (field === "video_file_id") {
-
-                    value =
-                        value === null ||
-                        value === ""
-                            ? null
-                            : String(value).trim();
-                }
-
-                // NORMALIZE NOTES
-                if (field === "notes") {
-
-                    value =
-                        value === ""
-                            ? null
-                            : value;
-                }
-
-                // NORMALIZE END TIME
-                if (
-                    field === "end_time" &&
-                    value === ""
-                ) {
-                    value = null;
-                }
-
-                // NORMALIZE DURATION
-                if (
-                    field === "duration_minutes" &&
-                    value !== null &&
-                    value !== ""
-                ) {
-                    value = Number(value);
-                }
-
-                // NORMALIZE AMOUNT
-                if (
-                    field === "amount" &&
-                    value !== null &&
-                    value !== ""
-                ) {
-                    value = Number(value);
-                }
-
-                updateFields.push(`${field} = ?`);
-                updateValues.push(value);
+                continue;
             }
-        });
 
+            let value = req.body[field];
+
+            // IDs
+            if (
+                field === "user_id" ||
+                field === "game_id" ||
+                field === "station_id"
+            ) {
+                value = Number(value);
+            }
+
+            // START TIME
+            if (field === "start_time") {
+                value = effectiveStartTime;
+            }
+
+            // END TIME
+            if (field === "end_time") {
+                value = effectiveEndTime;
+            }
+
+            // STATUS
+            if (
+                field === "status" ||
+                field === "recording_status"
+            ) {
+                value = String(value)
+                    .trim()
+                    .toLowerCase();
+            }
+
+            // DURATION
+            if (
+                field === "duration_minutes"
+            ) {
+                value =
+                    value === null ||
+                    value === ""
+                        ? null
+                        : Number(value);
+            }
+
+            // AMOUNT
+            if (field === "amount") {
+                value =
+                    value === null ||
+                    value === ""
+                        ? null
+                        : Number(value);
+            }
+
+            // VIDEO
+            if (
+                field === "video_file_id"
+            ) {
+                value =
+                    value === null ||
+                    value === ""
+                        ? null
+                        : String(value).trim();
+            }
+
+            // NOTES
+            if (field === "notes") {
+                value =
+                    value === ""
+                        ? null
+                        : value;
+            }
+
+            updateFields.push(
+                `${field} = ?`
+            );
+
+            updateValues.push(value);
+        }
 
         // -------------------------------------------------
-        // AUTO CALCULATE DURATION
+        // AUTO DURATION
         // -------------------------------------------------
+
+        const durationWasProvided =
+            req.body.duration_minutes !== undefined &&
+            req.body.duration_minutes !== null &&
+            req.body.duration_minutes !== "";
 
         if (
-            effectiveEndTime &&
+            calculatedDuration !== null &&
+            !durationWasProvided
+        ) {
+
+            updateFields.push(
+                "duration_minutes = ?"
+            );
+
+            updateValues.push(
+                calculatedDuration
+            );
+        }
+
+        // -------------------------------------------------
+        // END SESSION BUSINESS LOGIC
+        // -------------------------------------------------
+
+        let relatedBooking = null;
+
+        if (
+            existingSession.status === "active" &&
             (
-                req.body.duration_minutes === undefined ||
-                req.body.duration_minutes === null ||
-                req.body.duration_minutes === ""
+                effectiveStatus === "completed" ||
+                effectiveStatus === "cancelled"
             )
         ) {
 
-            const calculatedDuration =
-                calculateDuration(
-                    effectiveStartTime,
-                    effectiveEndTime
+            // Find booking related to this session.
+            relatedBooking =
+                await findMatchingBooking(
+                    connection,
+                    {
+                        user_id:
+                            existingSession.user_id,
+                        game_id:
+                            existingSession.game_id,
+                        station_id:
+                            existingSession.station_id,
+                        start_time:
+                            effectiveStartTime
+                    }
                 );
-
-            // Only add if start/end were involved
-            // and no explicit duration was supplied.
-            if (
-                req.body.end_time !== undefined ||
-                req.body.start_time !== undefined ||
-                effectiveStatus === "completed"
-            ) {
-
-                updateFields.push(
-                    "duration_minutes = ?"
-                );
-
-                updateValues.push(
-                    calculatedDuration
-                );
-            }
         }
 
-
         // -------------------------------------------------
-        // NO VALID FIELDS
+        // NO UPDATE FIELDS
         // -------------------------------------------------
 
         if (updateFields.length === 0) {
+
+            await connection.rollback();
+
             return res.status(400).json({
                 success: false,
-                message: "No valid fields provided for update"
+                message:
+                    "No valid fields provided for update"
             });
         }
 
-
         // -------------------------------------------------
-        // UPDATE DATABASE
+        // UPDATE GAME SESSION
         // -------------------------------------------------
 
         updateValues.push(sessionId);
 
-        await db.query(`
+        await connection.query(
+            `
             UPDATE game_sessions
             SET ${updateFields.join(", ")}
             WHERE id = ?
-        `, updateValues);
+            `,
+            updateValues
+        );
 
+        // -------------------------------------------------
+        // SESSION COMPLETED
+        // -------------------------------------------------
+
+        if (
+            existingSession.status === "active" &&
+            effectiveStatus === "completed"
+        ) {
+
+            // Complete booking
+            if (relatedBooking) {
+
+                await connection.query(
+                    `
+                    UPDATE bookings
+                    SET status = 'completed'
+                    WHERE id = ?
+                      AND status IN (
+                          'pending',
+                          'confirmed'
+                      )
+                    `,
+                    [relatedBooking.id]
+                );
+            }
+
+            // Release station.
+            // If station was changed to maintenance,
+            // preserve maintenance status.
+            await connection.query(
+                `
+                UPDATE gaming_stations
+                SET
+                    status =
+                        CASE
+                            WHEN status = 'maintenance'
+                                THEN 'maintenance'
+                            WHEN status = 'inactive'
+                                THEN 'inactive'
+                            ELSE 'available'
+                        END,
+                    current_player_id = NULL
+                WHERE id = ?
+                  AND (
+                      current_player_id = ?
+                      OR current_player_id IS NULL
+                  )
+                `,
+                [
+                    existingSession.station_id,
+                    existingSession.user_id
+                ]
+            );
+        }
+
+        // -------------------------------------------------
+        // SESSION CANCELLED
+        // -------------------------------------------------
+
+        if (
+            existingSession.status === "active" &&
+            effectiveStatus === "cancelled"
+        ) {
+
+            // Cancel booking
+            if (relatedBooking) {
+
+                await connection.query(
+                    `
+                    UPDATE bookings
+                    SET status = 'cancelled'
+                    WHERE id = ?
+                      AND status IN (
+                          'pending',
+                          'confirmed'
+                      )
+                    `,
+                    [relatedBooking.id]
+                );
+            }
+
+            // Release station
+            await connection.query(
+                `
+                UPDATE gaming_stations
+                SET
+                    status =
+                        CASE
+                            WHEN status = 'maintenance'
+                                THEN 'maintenance'
+                            WHEN status = 'inactive'
+                                THEN 'inactive'
+                            ELSE 'available'
+                        END,
+                    current_player_id = NULL
+                WHERE id = ?
+                  AND (
+                      current_player_id = ?
+                      OR current_player_id IS NULL
+                  )
+                `,
+                [
+                    existingSession.station_id,
+                    existingSession.user_id
+                ]
+            );
+        }
+
+        await connection.commit();
 
         return res.status(200).json({
             success: true,
-            message: "Game Session Updated Successfully"
+            message:
+                effectiveStatus === "completed"
+                    ? "Game Session Ended Successfully"
+                    : "Game Session Updated Successfully",
+            booking_updated:
+                relatedBooking !== null
         });
 
     } catch (error) {
 
-        console.log("Update Game Session Error:", error.message);
+        if (connection) {
+            await connection.rollback();
+        }
+
+        console.log(
+            "Update Game Session Error:",
+            error.message
+        );
 
         return res.status(500).json({
             success: false,
-            message: "Server error while updating game session"
+            message:
+                "Server error while updating game session"
         });
+
+    } finally {
+
+        if (connection) {
+            connection.release();
+        }
     }
 };
-
 
 // =====================================================
 // DELETE GAME SESSION
 // =====================================================
 
-const deleteGameSession = async (req, res) => {
+const deleteGameSession = async (
+    req,
+    res
+) => {
+
+    let connection;
+
     try {
 
         const { id } = req.params;
@@ -1030,60 +1878,116 @@ const deleteGameSession = async (req, res) => {
         if (!isPositiveInteger(id)) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid Game Session ID"
+                message:
+                    "Invalid Game Session ID"
+            });
+        }
+
+        if (
+            req.user &&
+            req.user.role_name === "Player"
+        ) {
+            return res.status(403).json({
+                success: false,
+                message:
+                    "Players cannot delete game sessions"
             });
         }
 
         const sessionId = Number(id);
 
+        connection = await db.getConnection();
+
+        await connection.beginTransaction();
 
         // -------------------------------------------------
-        // CHECK SESSION EXISTS
+        // CHECK SESSION
         // -------------------------------------------------
 
-        const [existingSessions] = await db.query(`
-            SELECT id
-            FROM game_sessions
-            WHERE id = ?
-        `, [sessionId]);
+        const [sessions] =
+            await connection.query(
+                `
+                SELECT
+                    id,
+                    status,
+                    station_id,
+                    user_id
+                FROM game_sessions
+                WHERE id = ?
+                FOR UPDATE
+                `,
+                [sessionId]
+            );
 
-        if (existingSessions.length === 0) {
+        if (sessions.length === 0) {
+
+            await connection.rollback();
+
             return res.status(404).json({
                 success: false,
-                message: "Game Session Not Found"
+                message:
+                    "Game Session Not Found"
             });
         }
 
+        const session = sessions[0];
 
-        // -------------------------------------------------
-        // DELETE GAME SESSION
-        // -------------------------------------------------
+        // Don't delete active session.
+        // It could leave the station occupied.
+        if (session.status === "active") {
 
-        await db.query(`
+            await connection.rollback();
+
+            return res.status(409).json({
+                success: false,
+                message:
+                    "Active game session cannot be deleted. End or cancel the session first."
+            });
+        }
+
+        await connection.query(
+            `
             DELETE FROM game_sessions
             WHERE id = ?
-        `, [sessionId]);
+            `,
+            [sessionId]
+        );
 
+        await connection.commit();
 
         return res.status(200).json({
             success: true,
-            message: "Game Session Deleted Successfully"
+            message:
+                "Game Session Deleted Successfully"
         });
 
     } catch (error) {
 
-        console.log("Delete Game Session Error:", error.message);
+        if (connection) {
+            await connection.rollback();
+        }
+
+        console.log(
+            "Delete Game Session Error:",
+            error.message
+        );
 
         return res.status(500).json({
             success: false,
-            message: "Server error while deleting game session"
+            message:
+                "Server error while deleting game session"
         });
+
+    } finally {
+
+        if (connection) {
+            connection.release();
+        }
     }
 };
 
-
 // =====================================================
-// EXPORT CONTROLLERS
+// EXPORT
 // =====================================================
 
 module.exports = {

@@ -7,6 +7,10 @@ const roleMiddleware = (...allowedRoles) =>{
             });
         }
 
+             console.log("User Role:", req.user.role_name);
+        console.log("Allowed Roles:", allowedRoles);
+
+
         if(!allowedRoles.includes(req.user.role_name)){
             return res.status(403).json({
                 success:false,

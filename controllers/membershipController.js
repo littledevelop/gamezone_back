@@ -50,6 +50,56 @@ const getAllMemberships = async (req, res) => {
     }
 };
 
+// =====================================================
+// GET MY MEMBERSHIP - PLAYER
+// =====================================================
+
+const getMyMembership = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        const [memberships] = await db.query(`
+            SELECT 
+                m.id,
+                m.user_id,
+                m.membership_type_id,
+                mt.name AS membership_type_name,
+                mt.duration_days,
+                mt.price,
+                m.start_date,
+                m.expiry_date,
+                m.status,
+                m.auto_renew
+            FROM memberships m
+            INNER JOIN membership_types mt
+                ON m.membership_type_id = mt.id
+            WHERE m.user_id = ?
+            AND m.status = 'active'
+            ORDER BY m.id DESC
+            LIMIT 1
+        `, [userId]);
+
+        if (memberships.length === 0) {
+            return res.status(200).json({
+                success: true,
+                membership: null
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            membership: memberships[0]
+        });
+
+    } catch (error) {
+        console.log("Get my membership Error:", error.message);
+
+        return res.status(500).json({
+            success: false,
+            message: "Server Error while fetching your membership"
+        });
+    }
+};
 
 // =====================================================
 // GET MEMBERSHIP BY ID
@@ -697,6 +747,7 @@ const deleteMembership = async (req, res) => {
 
 module.exports = {
     getAllMemberships,
+    getMyMembership,
     getMembershipByID,
     createMembership,
     updateMembership,

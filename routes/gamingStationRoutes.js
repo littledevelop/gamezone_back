@@ -14,7 +14,7 @@ const {getAllGamingStations,
 } = require("../controllers/gamingStationController");
 
 //get all game station routes
-router.get("/",authMiddleware,roleMiddleware("Admin","Staff"),getAllGamingStations);
+router.get("/",authMiddleware,roleMiddleware("Admin","Staff","Player"),getAllGamingStations);
 
 //get single game station route
 router.get("/:id",authMiddleware,roleMiddleware("Admin","Staff"),getGamingStationById);

@@ -57,8 +57,6 @@ const register = async(req,res) => {
 const login = async(req,res)=>{
     try{
         const {email,password} = req.body;
-        console.log(email);
-        console.log(password)
         if(!email || !password){
             return res.status(400).json({
                 success:false,
@@ -85,10 +83,10 @@ const login = async(req,res)=>{
         if(!passwordMatch){
             return res.status(401).json({
                 success:false,
-                message:"Invalid mobile number or password"
+                message:"Invalid Email ID or password"
             });
         }
-
+        
         //create jwt token
         const token = jwt.sign({
             id:user.id,
