@@ -221,7 +221,7 @@ const validatePayment = async(data,isCreate = false, paymentId=null) =>{
         
         //during update ignore the current payment itself
         if(paymentId !== null){
-            query += ` And id=?`;
+            query += ` And id !=?`;
             queryParams.push(paymentId);
         }
 

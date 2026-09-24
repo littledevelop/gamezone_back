@@ -4,7 +4,7 @@ const router = express.Router();
 const authMiddleware = require("../middleware/authMiddleware");
 const roleMiddleware = require("../middleware/roleMiddleware");
 
-const {getAllBookings,getBookingById,createBooking,updateBooking,deleteBooking} = require("../controllers/bookingController");
+const {getAllBookings,getBookingById,createBooking,updateBooking, updateBookingStatus ,deleteBooking} = require("../controllers/bookingController");
 
 //get all booking routes
 router.get("/",authMiddleware,roleMiddleware("Admin","Staff","Player"), getAllBookings);
@@ -19,9 +19,15 @@ router.post("/",authMiddleware,roleMiddleware("Admin","Staff"),createBooking);
 //update booking route
 router.put("/:id",authMiddleware,roleMiddleware("Admin","Staff"),updateBooking);
 
-//delete booking route
+//update booking status route
+router.put(
+    "/:id/status",
+    authMiddleware,
+    roleMiddleware("Admin", "Staff"),
+    updateBookingStatus
+);
 
-//create booking route
+//delete booking route
 router.delete("/:id",authMiddleware,roleMiddleware("Admin"),deleteBooking);
 
 module.exports = router;

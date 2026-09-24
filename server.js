@@ -10,6 +10,7 @@ const membershipTypesRoutes = require("./routes/membershipTypeRoutes");
 const membershipRoutes = require("./routes/membershipRoutes");
 const bookingRoutes = require("./routes/bookingRoutes");
 const gameSessionRoutes = require("./routes/gameSessionRoutes");
+const videoRecordingRoutes = require("./routes/videoRecordingRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const platformRoutes = require("./routes/platformRoutes");
 const gameTypeRoutes = require("./routes/gameTypeRoutes");
@@ -66,7 +67,7 @@ app.use("/api/memberships",membershipRoutes);
 app.use("/api/booking", bookingRoutes);
 
 app.use("/api/game-session", gameSessionRoutes);
-
+app.use("/api/video-recordings", videoRecordingRoutes);
 app.use("/api/payments",paymentRoutes);
 app.use("/api/platforms", platformRoutes);
 app.use("/api/game-types", gameTypeRoutes);

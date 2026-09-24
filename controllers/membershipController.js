@@ -563,8 +563,8 @@ const updateMembership = async (req, res) => {
         // ---------------------------------------------
 
         if (
-            req.body.start_date !== undefined ||
-            req.body.membership_type_id !== undefined
+            req.body.start_date !== undefined 
+            // || req.body.membership_type_id !== undefined
         ) {
 
             const newStartDate =

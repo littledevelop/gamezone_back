@@ -496,6 +496,54 @@ const updateBooking = async (req, res) => {
     }
 };
 
+// Update Booking Status
+const updateBookingStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status } = req.body;
+
+        // Validate status
+        if (!["pending", "confirmed", "cancelled", "completed"].includes(status)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid Booking Status"
+            });
+        }
+
+        // Check booking exists
+        const [existingBooking] = await db.query(
+            "SELECT id, status FROM bookings WHERE id=?",
+            [id]
+        );
+
+        if (existingBooking.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Booking Not Found"
+            });
+        }
+
+        // Update status
+        await db.query(
+            "UPDATE bookings SET status=? WHERE id=?",
+            [status, id]
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: `Booking ${status} successfully`
+        });
+
+    } catch (error) {
+        console.log("Update Booking Status Error:", error.message);
+
+        return res.status(500).json({
+            success: false,
+            message: "Server Error While Updating Booking Status"
+        });
+    }
+};
+
 //Delete Booking
 const deleteBooking = async(req,res)=>{
     try{
@@ -532,5 +580,6 @@ module.exports = {
     getBookingById,
     createBooking,
     updateBooking,
+    updateBookingStatus,
     deleteBooking
 };

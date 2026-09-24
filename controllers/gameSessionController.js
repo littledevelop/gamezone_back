@@ -248,10 +248,7 @@ const findMatchingBooking = async (
             return null;
         }
 
-        if (
-            !["pending", "confirmed"]
-                .includes(booking.status)
-        ) {
+        if (booking.status !== "confirmed") {
             return null;
         }
 
@@ -282,7 +279,7 @@ const findMatchingBooking = async (
               AND game_id = ?
               AND station_id = ?
               AND booking_date = ?
-              AND status IN ('pending', 'confirmed')
+              AND status = 'confirmed'
               AND start_time <= ?
               AND end_time > ?
             ORDER BY id DESC
@@ -907,8 +904,8 @@ const createGameSession = async (
 
         const sessionStatus =
             status !== undefined &&
-            status !== null &&
-            status !== ""
+                status !== null &&
+                status !== ""
                 ? String(status)
                     .trim()
                     .toLowerCase()
@@ -925,8 +922,8 @@ const createGameSession = async (
 
         const sessionRecordingStatus =
             recording_status !== undefined &&
-            recording_status !== null &&
-            recording_status !== ""
+                recording_status !== null &&
+                recording_status !== ""
                 ? String(recording_status)
                     .trim()
                     .toLowerCase()
@@ -939,8 +936,8 @@ const createGameSession = async (
 
         const normalizedEndTime =
             end_time === undefined ||
-            end_time === null ||
-            end_time === ""
+                end_time === null ||
+                end_time === ""
                 ? null
                 : normalizeDateTimeForDb(
                     end_time
@@ -1119,10 +1116,19 @@ const createGameSession = async (
                     stationId,
                     normalizedStartTime,
                     null,
-                    null,
+                    duration_minutes !== undefined &&
+                        duration_minutes !== null &&
+                        duration_minutes !== ""
+                        ? Number(duration_minutes)
+                        : booking
+                            ? calculateDuration(
+                                booking.start_time,
+                                booking.end_time
+                            )
+                            : null,
                     amount !== undefined &&
-                    amount !== null &&
-                    amount !== ""
+                        amount !== null &&
+                        amount !== ""
                         ? Number(amount)
                         : booking
                             ? Number(booking.amount || 0)
@@ -1130,13 +1136,13 @@ const createGameSession = async (
                     "active",
                     sessionRecordingStatus,
                     video_file_id !== undefined &&
-                    video_file_id !== null &&
-                    video_file_id !== ""
+                        video_file_id !== null &&
+                        video_file_id !== ""
                         ? String(video_file_id).trim()
                         : null,
                     notes !== undefined &&
-                    notes !== null &&
-                    notes !== ""
+                        notes !== null &&
+                        notes !== ""
                         ? notes
                         : null
                 ]
@@ -1157,24 +1163,6 @@ const createGameSession = async (
             [userId, stationId]
         );
 
-        // -------------------------------------------------
-        // PENDING BOOKING -> CONFIRMED
-        // -------------------------------------------------
-
-        if (
-            booking &&
-            booking.status === "pending"
-        ) {
-
-            await connection.query(
-                `
-                UPDATE bookings
-                SET status = 'confirmed'
-                WHERE id = ?
-                `,
-                [booking.id]
-            );
-        }
 
         await connection.commit();
 
@@ -1349,8 +1337,8 @@ const updateGameSession = async (
 
         const effectiveEndTime =
             rawEndTime === null ||
-            rawEndTime === undefined ||
-            rawEndTime === ""
+                rawEndTime === undefined ||
+                rawEndTime === ""
                 ? null
                 : normalizeDateTimeForDb(
                     rawEndTime
@@ -1419,7 +1407,7 @@ const updateGameSession = async (
             if (
                 req.body.user_id !== undefined &&
                 Number(req.body.user_id) !==
-                    Number(existingSession.user_id)
+                Number(existingSession.user_id)
             ) {
 
                 await connection.rollback();
@@ -1434,7 +1422,7 @@ const updateGameSession = async (
             if (
                 req.body.game_id !== undefined &&
                 Number(req.body.game_id) !==
-                    Number(existingSession.game_id)
+                Number(existingSession.game_id)
             ) {
 
                 await connection.rollback();
@@ -1449,7 +1437,7 @@ const updateGameSession = async (
             if (
                 req.body.station_id !== undefined &&
                 Number(req.body.station_id) !==
-                    Number(existingSession.station_id)
+                Number(existingSession.station_id)
             ) {
 
                 await connection.rollback();
@@ -1591,7 +1579,7 @@ const updateGameSession = async (
             ) {
                 value =
                     value === null ||
-                    value === ""
+                        value === ""
                         ? null
                         : Number(value);
             }
@@ -1600,7 +1588,7 @@ const updateGameSession = async (
             if (field === "amount") {
                 value =
                     value === null ||
-                    value === ""
+                        value === ""
                         ? null
                         : Number(value);
             }
@@ -1611,7 +1599,7 @@ const updateGameSession = async (
             ) {
                 value =
                     value === null ||
-                    value === ""
+                        value === ""
                         ? null
                         : String(value).trim();
             }
