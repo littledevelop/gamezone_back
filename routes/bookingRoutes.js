@@ -13,8 +13,12 @@ router.get("/",authMiddleware,roleMiddleware("Admin","Staff","Player"), getAllBo
 router.get("/:id",authMiddleware,roleMiddleware("Admin","Staff","Player"), getBookingById);
 
 //create booking route
-router.post("/",authMiddleware,roleMiddleware("Admin","Staff"),createBooking);
-
+router.post(
+    "/",
+    authMiddleware,
+    roleMiddleware("Admin", "Staff", "Player"),
+    createBooking
+);
 
 //update booking route
 router.put("/:id",authMiddleware,roleMiddleware("Admin","Staff"),updateBooking);

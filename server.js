@@ -15,6 +15,7 @@ const paymentRoutes = require("./routes/paymentRoutes");
 const platformRoutes = require("./routes/platformRoutes");
 const gameTypeRoutes = require("./routes/gameTypeRoutes");
 const userRoutes = require("./routes/userRoutes");
+const cameraRoutes =require("./routes/cameraRoutes");
 const app = express();
 
 //middleware
@@ -72,6 +73,7 @@ app.use("/api/payments",paymentRoutes);
 app.use("/api/platforms", platformRoutes);
 app.use("/api/game-types", gameTypeRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/cameras",cameraRoutes);
 const PORT = process.env.PORT || 5000;
 
 async function startServer(){

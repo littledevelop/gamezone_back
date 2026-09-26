@@ -297,9 +297,10 @@ const validateBookingData = async (bookingData) => {
 };
 
 //create booking
+//create booking
 const createBooking = async (req, res) => {
     try {
-        const {
+        let {
             user_id,
             game_id,
             station_id,
@@ -312,8 +313,30 @@ const createBooking = async (req, res) => {
             amount,
         } = req.body;
 
-        //common validation
-        const validationError = await validateBookingData(req.body);
+        // ---------------------------------------------
+        // PLAYER CAN ONLY CREATE BOOKING FOR THEMSELVES
+        // ---------------------------------------------
+
+        if (req.user.role_name === "Player") {
+            user_id = req.user.id;
+        }
+
+        // ---------------------------------------------
+        // COMMON VALIDATION
+        // ---------------------------------------------
+
+        const validationError = await validateBookingData({
+            user_id,
+            game_id,
+            station_id,
+            membership_id,
+            booking_date,
+            start_time,
+            end_time,
+            status,
+            payment_status,
+            amount,
+        });
 
         if (validationError) {
             return res.status(400).json({
@@ -322,17 +345,21 @@ const createBooking = async (req, res) => {
             });
         }
 
-        //check station booking conflict
+        // ---------------------------------------------
+        // CHECK STATION BOOKING CONFLICT
+        // ---------------------------------------------
+
         const [conflictBooking] = await db.query(
-            `SELECT id 
-            FROM bookings 
-            WHERE station_id=?
-            AND booking_date=? 
-            AND status IN ('pending','confirmed')
-            AND start_time < ? 
-            AND end_time > ? 
+            `
+            SELECT id
+            FROM bookings
+            WHERE station_id = ?
+            AND booking_date = ?
+            AND status IN ('pending', 'confirmed')
+            AND start_time < ?
+            AND end_time > ?
             `,
-            [station_id, booking_date, end_time, start_time],
+            [station_id, booking_date, end_time, start_time]
         );
 
         if (conflictBooking.length > 0) {
@@ -342,14 +369,21 @@ const createBooking = async (req, res) => {
             });
         }
 
-        //default values
+        // ---------------------------------------------
+        // DEFAULT VALUES
+        // ---------------------------------------------
+
         const bookingStatus = status ?? "pending";
         const paymentStatus = payment_status ?? "pending";
         const bookingAmount = amount ?? 0;
 
-        //insert booking
+        // ---------------------------------------------
+        // INSERT BOOKING
+        // ---------------------------------------------
+
         const [result] = await db.query(
-            `INSERT INTO bookings(    
+            `
+            INSERT INTO bookings(
                 user_id,
                 membership_id,
                 game_id,
@@ -359,7 +393,10 @@ const createBooking = async (req, res) => {
                 end_time,
                 status,
                 payment_status,
-                amount) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                amount
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `,
             [
                 user_id,
                 membership_id,
@@ -371,19 +408,24 @@ const createBooking = async (req, res) => {
                 bookingStatus,
                 paymentStatus,
                 bookingAmount,
-            ],
+            ]
         );
 
-        return res.status(200).json({
-            success: true,
-            message: "Booking Created Successfully",
-            booking_id: result.insertId,
-        });
+        return res.status(201).json({
+    success: true,
+    message: "Booking Created Successfully",
+    booking_id: result.insertId,
+    booking: {
+        id: result.insertId,
+        amount: bookingAmount,
+        status: bookingStatus,
+        payment_status: paymentStatus
+    }
+});
 
     } catch (error) {
-        
         console.log("Create Booking Error:", error.message);
-        
+
         return res.status(500).json({
             success: false,
             message: "Server Error While Creating Booking",
