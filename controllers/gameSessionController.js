@@ -170,6 +170,51 @@ const calculateDuration = (
     );
 };
 
+// CALCULATE DURATION FROM TIME VALUES
+// Example: 16:43:00 -> 23:50:00 = 427 minutes
+const calculateTimeDuration = (startTime, endTime) => {
+    if (!startTime || !endTime) {
+        return null;
+    }
+
+    const startParts = String(startTime)
+        .substring(0, 8)
+        .split(":")
+        .map(Number);
+
+    const endParts = String(endTime)
+        .substring(0, 8)
+        .split(":")
+        .map(Number);
+
+    if (
+        startParts.length !== 3 ||
+        endParts.length !== 3 ||
+        startParts.some(Number.isNaN) ||
+        endParts.some(Number.isNaN)
+    ) {
+        return null;
+    }
+
+    const startMinutes =
+        startParts[0] * 60 +
+        startParts[1];
+
+    const endMinutes =
+        endParts[0] * 60 +
+        endParts[1];
+
+    let difference =
+        endMinutes - startMinutes;
+
+    // Handles overnight bookings
+    if (difference < 0) {
+        difference += 24 * 60;
+    }
+
+    return difference;
+};
+
 // =====================================================
 // BOOKING HELPERS
 // =====================================================
@@ -390,7 +435,6 @@ const getAllGameSessions = async (
         });
     }
 };
-
 // =====================================================
 // GET GAME SESSION BY ID
 // =====================================================
@@ -399,17 +443,13 @@ const getGameSessionById = async (
     req,
     res
 ) => {
-
     try {
-
         const { id } = req.params;
 
         if (!isPositiveInteger(id)) {
-
             return res.status(400).json({
                 success: false,
-                message:
-                    "Invalid Game Session ID"
+                message: "Invalid Game Session ID"
             });
         }
 
@@ -430,11 +470,21 @@ const getGameSessionById = async (
                 gs.duration_minutes,
                 gs.amount,
                 gs.status,
+
                 gs.recording_status,
                 gs.video_file_id,
                 gs.notes,
                 gs.created_at,
-                gs.updated_at
+                gs.updated_at,
+
+                vr.id AS video_recording_id,
+                vr.file_name AS video_file_name,
+                vr.cloudinary_url AS video_url,
+                vr.cloudinary_public_id,
+                vr.file_size AS video_file_size,
+                vr.duration_seconds AS video_duration_seconds,
+                vr.recording_status AS video_recording_status,
+                vr.recorded_at
 
             FROM game_sessions gs
 
@@ -447,6 +497,16 @@ const getGameSessionById = async (
             INNER JOIN gaming_stations st
                 ON gs.station_id = st.id
 
+            LEFT JOIN video_recordings vr
+                ON vr.id = (
+                    SELECT vr2.id
+                    FROM video_recordings vr2
+                    WHERE vr2.session_id = gs.id
+                      AND vr2.recording_status = 'completed'
+                    ORDER BY vr2.id DESC
+                    LIMIT 1
+                )
+
             WHERE gs.id = ?
         `;
 
@@ -457,7 +517,6 @@ const getGameSessionById = async (
             req.user &&
             req.user.role_name === "Player"
         ) {
-
             query += `
                 AND gs.user_id = ?
             `;
@@ -465,28 +524,68 @@ const getGameSessionById = async (
             queryParams.push(req.user.id);
         }
 
-        const [gameSessions] =
-            await db.query(
-                query,
-                queryParams
-            );
+        const [gameSessions] = await db.query(
+            query,
+            queryParams
+        );
 
         if (gameSessions.length === 0) {
-
             return res.status(404).json({
                 success: false,
-                message:
-                    "Game Session Not Found"
+                message: "Game Session Not Found"
             });
         }
 
+        const session = gameSessions[0];
+
+        // -------------------------------------------------
+        // BUILD RECORDING OBJECT
+        // -------------------------------------------------
+
+        let recording = null;
+
+        if (session.video_recording_id) {
+            recording = {
+                id: session.video_recording_id,
+                file_name: session.video_file_name,
+                video_url: session.video_url,
+                cloudinary_public_id:
+                    session.cloudinary_public_id,
+                file_size: session.video_file_size,
+                duration_seconds:
+                    session.video_duration_seconds,
+                recording_status:
+                    session.video_recording_status,
+                recorded_at: session.recorded_at
+            };
+        }
+
+        // -------------------------------------------------
+        // REMOVE FLAT RECORDING FIELDS FROM RESPONSE
+        // -------------------------------------------------
+
+        delete session.video_recording_id;
+        delete session.video_file_name;
+        delete session.video_url;
+        delete session.cloudinary_public_id;
+        delete session.video_file_size;
+        delete session.video_duration_seconds;
+        delete session.video_recording_status;
+        delete session.recorded_at;
+
+        // -------------------------------------------------
+        // RESPONSE
+        // -------------------------------------------------
+
         return res.status(200).json({
             success: true,
-            data: gameSessions[0]
+            data: {
+                ...session,
+                recording
+            }
         });
 
     } catch (error) {
-
         console.log(
             "Get Game Session By ID Error:",
             error.message
@@ -1121,7 +1220,7 @@ const createGameSession = async (
                         duration_minutes !== ""
                         ? Number(duration_minutes)
                         : booking
-                            ? calculateDuration(
+                            ? calculateTimeDuration(
                                 booking.start_time,
                                 booking.end_time
                             )

@@ -1,7 +1,10 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const cleanupExpiredVideos = require("./services/videoCleanupService");
+
 const db = require("./config/db");
+
 const setupRoutes = require("./routes/setupRoutes");
 const authRoutes = require("./routes/authRoutes");
 const gameRoutes = require("./routes/gameRoutes");
@@ -11,16 +14,19 @@ const membershipRoutes = require("./routes/membershipRoutes");
 const bookingRoutes = require("./routes/bookingRoutes");
 const gameSessionRoutes = require("./routes/gameSessionRoutes");
 const videoRecordingRoutes = require("./routes/videoRecordingRoutes");
+const qrCodeRoutes = require("./routes/qrCodeRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const platformRoutes = require("./routes/platformRoutes");
 const gameTypeRoutes = require("./routes/gameTypeRoutes");
 const userRoutes = require("./routes/userRoutes");
 const cameraRoutes =require("./routes/cameraRoutes");
+
 const app = express();
 
 //middleware
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({extended:true}));
 
 //Home Route
 app.get("/",(req,res)=>{
@@ -69,6 +75,7 @@ app.use("/api/booking", bookingRoutes);
 
 app.use("/api/game-session", gameSessionRoutes);
 app.use("/api/video-recordings", videoRecordingRoutes);
+app.use("/api/qr-codes", qrCodeRoutes);
 app.use("/api/payments",paymentRoutes);
 app.use("/api/platforms", platformRoutes);
 app.use("/api/game-types", gameTypeRoutes);
@@ -79,14 +86,22 @@ const PORT = process.env.PORT || 5000;
 async function startServer(){
     try{
         const connection = await db.getConnection();
-        
         console.log("MYSQL Database Connected Successfully");
-
         connection.release();
 
-        app.listen(PORT,()=>{
-            console.log(`GameZone Server running on port ${PORT}`);
+        app.listen(PORT,()=>{ 
+            console.log(`GameZone Server running on port ${PORT}`); 
         });
+
+        // Run cleanup once when server starts
+        cleanupExpiredVideos();
+
+        // Run cleanup every 5 minutes
+        setInterval(
+            cleanupExpiredVideos,
+            5 * 60 * 1000
+        );
+
     }catch(error){
         console.error("MYSQL Connection Failed:", error.message);
         process.exit(1);

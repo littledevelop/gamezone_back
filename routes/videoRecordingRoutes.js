@@ -6,12 +6,13 @@ const {
     getVideoRecordingById,
     createVideoRecording,
     updateVideoRecording,
-    deleteVideoRecording
+    deleteVideoRecording,
+    uploadVideoToCloudinary
 } = require("../controllers/videoRecordingController");
 
 const authMiddleware = require("../middleware/authMiddleware");
 const roleMiddleware = require("../middleware/roleMiddleware");
-
+const upload = require("../middleware/uploadMiddleware");
 // View recordings
 router.get(
     "/",
@@ -52,4 +53,11 @@ router.delete(
     deleteVideoRecording
 );
 
+router.post(
+    "/upload",
+    authMiddleware,
+    roleMiddleware("Admin", "Staff"),
+    upload.single("video"),
+    uploadVideoToCloudinary
+);
 module.exports = router;

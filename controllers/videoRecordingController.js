@@ -1,5 +1,6 @@
 const db = require("../config/db");
-
+const cloudinary = require("../config/cloudinary");
+const fs = require("fs");
 // =====================================================
 // GET ALL VIDEO RECORDINGS
 // =====================================================
@@ -536,11 +537,181 @@ const deleteVideoRecording = async (req, res) => {
     }
 };
 
+const uploadVideoToCloudinary = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({
+                success: false,
+                message: "Video file is required",
+            });
+        }
+
+        const { session_id, camera_id } = req.body;
+
+        if (!session_id) {
+            return res.status(400).json({
+                success: false,
+                message: "Session ID is required",
+            });
+        }
+
+        if (!camera_id) {
+            return res.status(400).json({
+                success: false,
+                message: "Camera ID is required",
+            });
+        }
+
+        // Check session
+        const [sessions] = await db.query(
+            `SELECT id, user_id FROM game_sessions WHERE id = ?`,
+            [session_id]
+        );
+
+        if (sessions.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Game session not found",
+            });
+        }
+
+        // Player can only upload for own session
+        if (
+            req.user.role_name === "Player" &&
+            Number(sessions[0].user_id) !== Number(req.user.id)
+        ) {
+            return res.status(403).json({
+                success: false,
+                message: "Access denied",
+            });
+        }
+
+        // Check camera
+        const [cameras] = await db.query(
+            `SELECT id, status FROM cameras WHERE id = ?`,
+            [camera_id]
+        );
+
+        if (cameras.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Camera not found",
+            });
+        }
+
+        if (cameras[0].status !== "active") {
+            return res.status(400).json({
+                success: false,
+                message: "Camera is not active",
+            });
+        }
+
+        // ==========================================
+        // Upload temporary file to Cloudinary
+        // ==========================================
+
+        const uploadResult = await cloudinary.uploader.upload(
+            req.file.path,
+            {
+                resource_type: "video",
+                folder: "gamezone/gameplay-recordings",
+            }
+        );
+
+        // ==========================================
+        // Save recording in MySQL
+        // ==========================================
+
+        const fileName = req.file.originalname;
+
+        const [result] = await db.query(
+            `
+            INSERT INTO video_recordings
+            (
+                session_id,
+                camera_id,
+                file_name,
+                file_path,
+                cloudinary_url,
+                cloudinary_public_id,
+                file_size,
+                duration_seconds,
+                recording_status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `,
+            [
+                session_id,
+                camera_id,
+                fileName,
+                req.file.path,
+                uploadResult.secure_url,
+                uploadResult.public_id,
+                req.file.size,
+                uploadResult.duration || null,
+                "completed",
+            ]
+        );
+
+        // ==========================================
+        // Update game session
+        // ==========================================
+
+        await db.query(
+            `
+            UPDATE game_sessions
+            SET
+                recording_status = 'completed',
+                video_file_id = ?
+            WHERE id = ?
+            `,
+            [result.insertId, session_id]
+        );
+
+        // ==========================================
+        // Delete temporary local video
+        // ==========================================
+
+        if (fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
+
+        return res.status(201).json({
+            success: true,
+            message: "Video uploaded successfully",
+            data: {
+                id: result.insertId,
+                session_id,
+                camera_id,
+                file_name: fileName,
+                cloudinary_url: uploadResult.secure_url,
+                cloudinary_public_id: uploadResult.public_id,
+                file_size: req.file.size,
+                duration_seconds: uploadResult.duration || null,
+                recording_status: "completed",
+            },
+        });
+
+    } catch (error) {
+        console.error("Video upload error:", error);
+
+        // Delete temporary file if upload fails
+        if (req.file?.path && fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
+
+        return res.status(500).json({
+            success: false,
+            message: error.message || "Failed to upload video",
+        });
+    }
+};
 
 module.exports = {
     getAllVideoRecordings,
     getVideoRecordingById,
     createVideoRecording,
     updateVideoRecording,
-    deleteVideoRecording
+    deleteVideoRecording,
+    uploadVideoToCloudinary
 };

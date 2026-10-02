@@ -1,4 +1,9 @@
+
 const db = require("../config/db");
+
+// ==================================================
+// GET ALL BOOKINGS
+// ==================================================
 
 const getAllBookings = async (req, res) => {
     try {
@@ -68,7 +73,11 @@ const getAllBookings = async (req, res) => {
     }
 };
 
-//Get Booking By ID
+
+// ==================================================
+// GET BOOKING BY ID
+// ==================================================
+
 const getBookingById = async (req, res) => {
     try {
         const { id } = req.params;
@@ -114,15 +123,13 @@ const getBookingById = async (req, res) => {
 
         let queryParams = [];
 
-        if(req.user.role_name === "Player"){
+        if (req.user.role_name === "Player") {
             query += ` WHERE b.id = ? AND b.user_id = ?`;
-            queryParams = [id, req.user.id]; 
-        }else{
+            queryParams = [id, req.user.id];
+        } else {
             query += ` WHERE b.id = ?`;
             queryParams = [id];
         }
-
-        query += ` ORDER BY b.id DESC`;
 
         const [bookings] = await db.query(query, queryParams);
 
@@ -148,7 +155,11 @@ const getBookingById = async (req, res) => {
     }
 };
 
-//Common Booking Validation
+
+// ==================================================
+// COMMON BOOKING VALIDATION
+// ==================================================
+
 const validateBookingData = async (bookingData) => {
 
     const {
@@ -160,9 +171,12 @@ const validateBookingData = async (bookingData) => {
         start_time,
         end_time,
         status,
-        payment_status,
-        amount
+        payment_status
     } = bookingData;
+
+    // --------------------------------------------------
+    // REQUIRED FIELDS
+    // --------------------------------------------------
 
     if (
         !user_id ||
@@ -176,7 +190,10 @@ const validateBookingData = async (bookingData) => {
         return "All Booking Fields are required";
     }
 
-    // Validate user
+    // --------------------------------------------------
+    // VALIDATE USER
+    // --------------------------------------------------
+
     const [user] = await db.query(
         "SELECT id FROM users WHERE id=?",
         [user_id]
@@ -186,7 +203,10 @@ const validateBookingData = async (bookingData) => {
         return "Invalid user";
     }
 
-    // Validate membership
+    // --------------------------------------------------
+    // VALIDATE MEMBERSHIP
+    // --------------------------------------------------
+
     const [membership] = await db.query(
         `SELECT id, user_id, status, expiry_date
          FROM memberships
@@ -199,7 +219,10 @@ const validateBookingData = async (bookingData) => {
     }
 
     // Membership must belong to selected user
-    if (Number(membership[0].user_id) !== Number(user_id)) {
+    if (
+        Number(membership[0].user_id) !==
+        Number(user_id)
+    ) {
         return "Membership does not belong to this user";
     }
 
@@ -210,7 +233,9 @@ const validateBookingData = async (bookingData) => {
 
     // Membership expiry
     const today = new Date();
-    const expiryDate = new Date(membership[0].expiry_date);
+    const expiryDate = new Date(
+        membership[0].expiry_date
+    );
 
     today.setHours(0, 0, 0, 0);
     expiryDate.setHours(0, 0, 0, 0);
@@ -219,9 +244,19 @@ const validateBookingData = async (bookingData) => {
         return "Membership has expired";
     }
 
-    // Validate game
+    // --------------------------------------------------
+    // VALIDATE GAME
+    // --------------------------------------------------
+
     const [game] = await db.query(
-        "SELECT id, status FROM games WHERE id=?",
+        `
+        SELECT
+            id,
+            status,
+            price
+        FROM games
+        WHERE id=?
+        `,
         [game_id]
     );
 
@@ -233,9 +268,28 @@ const validateBookingData = async (bookingData) => {
         return "Selected game is inactive";
     }
 
-    // Validate gaming station
+    // Validate game price
+    if (
+        game[0].price === null ||
+        game[0].price === undefined ||
+        isNaN(game[0].price) ||
+        Number(game[0].price) < 0
+    ) {
+        return "Selected game has an invalid price";
+    }
+
+    // --------------------------------------------------
+    // VALIDATE GAMING STATION
+    // --------------------------------------------------
+
     const [station] = await db.query(
-        "SELECT id, status FROM gaming_stations WHERE id=?",
+        `
+        SELECT
+            id,
+            status
+        FROM gaming_stations
+        WHERE id=?
+        `,
         [station_id]
     );
 
@@ -247,12 +301,18 @@ const validateBookingData = async (bookingData) => {
         return "Selected gaming station is under maintenance";
     }
 
-    // Validate time
+    // --------------------------------------------------
+    // VALIDATE TIME
+    // --------------------------------------------------
+
     if (start_time >= end_time) {
         return "End time must be greater than start time";
     }
 
-    // Validate booking date
+    // --------------------------------------------------
+    // VALIDATE BOOKING DATE
+    // --------------------------------------------------
+
     const selectedDate = new Date(booking_date);
 
     if (isNaN(selectedDate.getTime())) {
@@ -268,36 +328,45 @@ const validateBookingData = async (bookingData) => {
         return "Booking Date cannot be in the past";
     }
 
-    // Validate booking status
+    // --------------------------------------------------
+    // VALIDATE BOOKING STATUS
+    // --------------------------------------------------
+
     if (
         status &&
-        !["pending", "confirmed", "cancelled", "completed"].includes(status)
+        ![
+            "pending",
+            "confirmed",
+            "cancelled",
+            "completed"
+        ].includes(status)
     ) {
         return "Invalid Booking Status";
     }
 
-    // Validate payment status
+    // --------------------------------------------------
+    // VALIDATE PAYMENT STATUS
+    // --------------------------------------------------
+
     if (
         payment_status &&
-        !["pending", "paid", "refunded"].includes(payment_status)
+        ![
+            "pending",
+            "paid",
+            "refunded"
+        ].includes(payment_status)
     ) {
         return "Invalid Payment Status";
-    }
-
-    // Validate amount
-    if (
-        amount !== undefined &&
-        amount !== null &&
-        (isNaN(amount) || Number(amount) < 0)
-    ) {
-        return "Amount must be a valid positive number";
     }
 
     return null;
 };
 
-//create booking
-//create booking
+
+// ==================================================
+// CREATE BOOKING
+// ==================================================
+
 const createBooking = async (req, res) => {
     try {
         let {
@@ -309,45 +378,81 @@ const createBooking = async (req, res) => {
             start_time,
             end_time,
             status,
-            payment_status,
-            amount,
+            payment_status
         } = req.body;
 
-        // ---------------------------------------------
+        // --------------------------------------------------
         // PLAYER CAN ONLY CREATE BOOKING FOR THEMSELVES
-        // ---------------------------------------------
+        // --------------------------------------------------
 
         if (req.user.role_name === "Player") {
             user_id = req.user.id;
         }
 
-        // ---------------------------------------------
+        // --------------------------------------------------
         // COMMON VALIDATION
-        // ---------------------------------------------
+        // --------------------------------------------------
 
-        const validationError = await validateBookingData({
-            user_id,
-            game_id,
-            station_id,
-            membership_id,
-            booking_date,
-            start_time,
-            end_time,
-            status,
-            payment_status,
-            amount,
-        });
+        const validationError =
+            await validateBookingData({
+                user_id,
+                game_id,
+                station_id,
+                membership_id,
+                booking_date,
+                start_time,
+                end_time,
+                status,
+                payment_status
+            });
 
         if (validationError) {
             return res.status(400).json({
                 success: false,
-                message: validationError,
+                message: validationError
             });
         }
 
-        // ---------------------------------------------
+        // --------------------------------------------------
+        // GET GAME PRICE FROM DATABASE
+        // --------------------------------------------------
+
+        const [gameResult] = await db.query(
+            `
+            SELECT
+                id,
+                game_name,
+                price,
+                status
+            FROM games
+            WHERE id=?
+            `,
+            [game_id]
+        );
+
+        if (gameResult.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Game Not Found"
+            });
+        }
+
+        if (gameResult[0].status !== "active") {
+            return res.status(400).json({
+                success: false,
+                message: "Selected game is inactive"
+            });
+        }
+
+        // IMPORTANT:
+        // Booking amount always comes from games.price.
+        // Do NOT trust amount sent from frontend.
+        const bookingAmount =
+            Number(gameResult[0].price);
+
+        // --------------------------------------------------
         // CHECK STATION BOOKING CONFLICT
-        // ---------------------------------------------
+        // --------------------------------------------------
 
         const [conflictBooking] = await db.query(
             `
@@ -359,27 +464,58 @@ const createBooking = async (req, res) => {
             AND start_time < ?
             AND end_time > ?
             `,
-            [station_id, booking_date, end_time, start_time]
+            [
+                station_id,
+                booking_date,
+                end_time,
+                start_time
+            ]
         );
 
         if (conflictBooking.length > 0) {
             return res.status(409).json({
                 success: false,
-                message: "Gaming station is already booked for this time",
+                message:
+                    "Gaming station is already booked for this time"
             });
         }
 
-        // ---------------------------------------------
+        // --------------------------------------------------
         // DEFAULT VALUES
-        // ---------------------------------------------
+        // --------------------------------------------------
 
-        const bookingStatus = status ?? "pending";
-        const paymentStatus = payment_status ?? "pending";
-        const bookingAmount = amount ?? 0;
+        const bookingStatus =
+            status ?? "pending";
 
-        // ---------------------------------------------
+        const paymentStatus =
+            payment_status ?? "pending";
+
+        // --------------------------------------------------
+        // IMPORTANT PAYMENT RULE
+        // --------------------------------------------------
+        //
+        // A new booking should not be automatically
+        // marked as paid/confirmed.
+        //
+        // Player pays at counter.
+        // Staff/Admin records payment.
+        // Payment completion then confirms booking.
+        //
+
+        if (
+            req.user.role_name === "Player" &&
+            paymentStatus !== "pending"
+        ) {
+            return res.status(403).json({
+                success: false,
+                message:
+                    "Player booking must start with pending payment"
+            });
+        }
+
+        // --------------------------------------------------
         // INSERT BOOKING
-        // ---------------------------------------------
+        // --------------------------------------------------
 
         const [result] = await db.query(
             `
@@ -407,36 +543,48 @@ const createBooking = async (req, res) => {
                 end_time,
                 bookingStatus,
                 paymentStatus,
-                bookingAmount,
+                bookingAmount
             ]
         );
 
         return res.status(201).json({
-    success: true,
-    message: "Booking Created Successfully",
-    booking_id: result.insertId,
-    booking: {
-        id: result.insertId,
-        amount: bookingAmount,
-        status: bookingStatus,
-        payment_status: paymentStatus
-    }
-});
+            success: true,
+            message: "Booking Created Successfully",
+
+            booking_id: result.insertId,
+
+            booking: {
+                id: result.insertId,
+                game_id,
+                amount: bookingAmount,
+                status: bookingStatus,
+                payment_status: paymentStatus
+            }
+        });
 
     } catch (error) {
-        console.log("Create Booking Error:", error.message);
+        console.log(
+            "Create Booking Error:",
+            error.message
+        );
 
         return res.status(500).json({
             success: false,
-            message: "Server Error While Creating Booking",
+            message:
+                "Server Error While Creating Booking"
         });
     }
 };
 
-//Update booking
+
+// ==================================================
+// UPDATE BOOKING
+// ==================================================
+
 const updateBooking = async (req, res) => {
     try {
-        const {id} = req.params;
+        const { id } = req.params;
+
         const {
             user_id,
             game_id,
@@ -446,58 +594,141 @@ const updateBooking = async (req, res) => {
             start_time,
             end_time,
             status,
-            payment_status,
-            amount,
+            payment_status
         } = req.body;
 
-        const [existingBooking] = await db.query("SELECT id FROM bookings WHERE id =?",[id]);
+        // --------------------------------------------------
+        // CHECK EXISTING BOOKING
+        // --------------------------------------------------
 
-        if(existingBooking.length === 0){
+        const [existingBooking] = await db.query(
+            `
+            SELECT
+                id,
+                status,
+                payment_status
+            FROM bookings
+            WHERE id=?
+            `,
+            [id]
+        );
+
+        if (existingBooking.length === 0) {
             return res.status(404).json({
-                success:false,
-                message:"Booking Not Found"
+                success: false,
+                message: "Booking Not Found"
             });
         }
 
-        //common validation
-        const validationError = await validateBookingData(req.body);
+        // --------------------------------------------------
+        // COMMON VALIDATION
+        // --------------------------------------------------
+
+        const validationError =
+            await validateBookingData({
+                user_id,
+                game_id,
+                station_id,
+                membership_id,
+                booking_date,
+                start_time,
+                end_time,
+                status,
+                payment_status
+            });
 
         if (validationError) {
             return res.status(400).json({
                 success: false,
-                message: validationError,
+                message: validationError
             });
         }
 
-        //check station booking conflict
-        const [conflictBooking] = await db.query(
-            `SELECT id 
-            FROM bookings 
-            WHERE station_id=?
-            AND booking_date=? 
-            AND status IN ('pending','confirmed')
-            AND start_time < ? 
-            AND end_time > ?
-            AND id != ? 
+        // --------------------------------------------------
+        // GET GAME PRICE FROM DATABASE
+        // --------------------------------------------------
+
+        const [gameResult] = await db.query(
+            `
+            SELECT
+                id,
+                price,
+                status
+            FROM games
+            WHERE id=?
             `,
-            [station_id, booking_date, end_time, start_time,id],
+            [game_id]
+        );
+
+        if (gameResult.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Game Not Found"
+            });
+        }
+
+        if (gameResult[0].status !== "active") {
+            return res.status(400).json({
+                success: false,
+                message: "Selected game is inactive"
+            });
+        }
+
+        // IMPORTANT:
+        // Never trust amount from frontend.
+        const bookingAmount =
+            Number(gameResult[0].price);
+
+        // --------------------------------------------------
+        // CHECK STATION BOOKING CONFLICT
+        // --------------------------------------------------
+
+        const [conflictBooking] = await db.query(
+            `
+            SELECT id
+            FROM bookings
+            WHERE station_id=?
+            AND booking_date=?
+            AND status IN ('pending','confirmed')
+            AND start_time < ?
+            AND end_time > ?
+            AND id != ?
+            `,
+            [
+                station_id,
+                booking_date,
+                end_time,
+                start_time,
+                id
+            ]
         );
 
         if (conflictBooking.length > 0) {
             return res.status(409).json({
                 success: false,
-                message: "Gaming station is already booked for this time",
+                message:
+                    "Gaming station is already booked for this time"
             });
         }
 
-        //default values
-        const bookingStatus = status ?? "pending";
-        const paymentStatus = payment_status ?? "pending";
-        const bookingAmount = amount ?? 0;
+        // --------------------------------------------------
+        // DEFAULT VALUES
+        // --------------------------------------------------
 
-        //update booking
-         await db.query(
-            `UPDATE bookings SET
+        const bookingStatus =
+            status ?? "pending";
+
+        const paymentStatus =
+            payment_status ?? "pending";
+
+        // --------------------------------------------------
+        // UPDATE BOOKING
+        // --------------------------------------------------
+
+        await db.query(
+            `
+            UPDATE bookings
+            SET
                 user_id=?,
                 membership_id=?,
                 game_id=?,
@@ -507,7 +738,9 @@ const updateBooking = async (req, res) => {
                 end_time=?,
                 status=?,
                 payment_status=?,
-                amount=? WHERE id=?`,
+                amount=?
+            WHERE id=?
+            `,
             [
                 user_id,
                 membership_id,
@@ -520,41 +753,77 @@ const updateBooking = async (req, res) => {
                 paymentStatus,
                 bookingAmount,
                 id
-            ],
+            ]
         );
 
         return res.status(200).json({
             success: true,
             message: "Booking updated Successfully",
+            booking: {
+                id,
+                amount: bookingAmount,
+                status: bookingStatus,
+                payment_status: paymentStatus
+            }
         });
+
     } catch (error) {
-      
-        console.log("Update Booking Error:", error.message);
-      
+
+        console.log(
+            "Update Booking Error:",
+            error.message
+        );
+
         return res.status(500).json({
             success: false,
-            message: "Server Error While Updating Booking"
+            message:
+                "Server Error While Updating Booking"
         });
     }
 };
 
-// Update Booking Status
+
+// ==================================================
+// UPDATE BOOKING STATUS
+// ==================================================
+
 const updateBookingStatus = async (req, res) => {
     try {
         const { id } = req.params;
         const { status } = req.body;
 
-        // Validate status
-        if (!["pending", "confirmed", "cancelled", "completed"].includes(status)) {
+        // --------------------------------------------------
+        // VALIDATE STATUS
+        // --------------------------------------------------
+
+        if (
+            ![
+                "pending",
+                "confirmed",
+                "cancelled",
+                "completed"
+            ].includes(status)
+        ) {
             return res.status(400).json({
                 success: false,
                 message: "Invalid Booking Status"
             });
         }
 
-        // Check booking exists
+        // --------------------------------------------------
+        // GET BOOKING
+        // --------------------------------------------------
+
         const [existingBooking] = await db.query(
-            "SELECT id, status FROM bookings WHERE id=?",
+            `
+            SELECT
+                id,
+                user_id,
+                status,
+                payment_status
+            FROM bookings
+            WHERE id=?
+            `,
             [id]
         );
 
@@ -565,57 +834,187 @@ const updateBookingStatus = async (req, res) => {
             });
         }
 
-        // Update status
+        const booking =
+            existingBooking[0];
+
+        // --------------------------------------------------
+        // PLAYER PERMISSION
+        // --------------------------------------------------
+
+        if (req.user.role_name === "Player") {
+
+            // Player can only update own booking
+            if (
+                Number(booking.user_id) !==
+                Number(req.user.id)
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "You can only manage your own bookings"
+                });
+            }
+
+            // Player can ONLY cancel
+            if (status !== "cancelled") {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "Player can only cancel their booking"
+                });
+            }
+
+            // Cannot cancel completed booking
+            if (booking.status === "completed") {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Completed booking cannot be cancelled"
+                });
+            }
+
+            // Already cancelled
+            if (booking.status === "cancelled") {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Booking is already cancelled"
+                });
+            }
+        }
+
+        // --------------------------------------------------
+        // ADMIN / STAFF CONFIRMATION
+        // --------------------------------------------------
+
+        if (
+            ["Admin", "Staff"].includes(
+                req.user.role_name
+            ) &&
+            status === "confirmed"
+        ) {
+
+            // Payment must be completed
+            if (
+                booking.payment_status !== "paid"
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Payment must be completed before confirming the booking"
+                });
+            }
+        }
+
+        // --------------------------------------------------
+        // PREVENT INVALID STATUS CHANGES
+        // --------------------------------------------------
+
+        if (booking.status === "cancelled") {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Cancelled booking cannot be changed"
+            });
+        }
+
+        if (
+            booking.status === "completed" &&
+            status !== "completed"
+        ) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Completed booking cannot be changed"
+            });
+        }
+
+        // --------------------------------------------------
+        // UPDATE STATUS
+        // --------------------------------------------------
+
         await db.query(
-            "UPDATE bookings SET status=? WHERE id=?",
+            `
+            UPDATE bookings
+            SET status=?
+            WHERE id=?
+            `,
             [status, id]
         );
 
         return res.status(200).json({
             success: true,
-            message: `Booking ${status} successfully`
+            message:
+                `Booking ${status} successfully`
         });
 
     } catch (error) {
-        console.log("Update Booking Status Error:", error.message);
+
+        console.log(
+            "Update Booking Status Error:",
+            error.message
+        );
 
         return res.status(500).json({
             success: false,
-            message: "Server Error While Updating Booking Status"
+            message:
+                "Server Error While Updating Booking Status"
         });
     }
 };
 
-//Delete Booking
-const deleteBooking = async(req,res)=>{
-    try{
-        const {id} = req.params;
 
-        //check booking exists
-        const [existingBooking] = await db.query("SELECT id FROM bookings WHERE id=?",[id]);
+// ==================================================
+// DELETE BOOKING
+// ==================================================
 
-        if(existingBooking.length === 0){
+const deleteBooking = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Check booking exists
+        const [existingBooking] = await db.query(
+            "SELECT id FROM bookings WHERE id=?",
+            [id]
+        );
+
+        if (existingBooking.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: "Booking Not Found"
             });
         }
 
-        await db.query(`DELETE FROM bookings WHERE id=?`,[id]);
+        await db.query(
+            "DELETE FROM bookings WHERE id=?",
+            [id]
+        );
 
-          return res.status(200).json({
+        return res.status(200).json({
             success: true,
-            message: "Booking Deleted Successfully"
+            message:
+                "Booking Deleted Successfully"
         });
 
-    }catch(error){
-      console.log("Delete Booking Error:", error.message);
+    } catch (error) {
+
+        console.log(
+            "Delete Booking Error:",
+            error.message
+        );
+
         return res.status(500).json({
             success: false,
-            message: "Server Error While Deleting Booking"
-        });   
+            message:
+                "Server Error While Deleting Booking"
+        });
     }
 };
+
+
+// ==================================================
+// EXPORT
+// ==================================================
 
 module.exports = {
     getAllBookings,

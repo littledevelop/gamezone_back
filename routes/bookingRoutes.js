@@ -27,7 +27,7 @@ router.put("/:id",authMiddleware,roleMiddleware("Admin","Staff"),updateBooking);
 router.put(
     "/:id/status",
     authMiddleware,
-    roleMiddleware("Admin", "Staff"),
+    roleMiddleware("Admin", "Staff","Player"),
     updateBookingStatus
 );
 

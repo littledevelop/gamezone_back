@@ -1,54 +1,58 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const db = require("../config/db");
+const {createUserRecord} = require("./userController");
 
-//register user
-const register = async(req,res) => {
-    try{
+// Register Player
+const register = async (req, res) => {
+    try {
+        const {
+            full_name,
+            mobile,
+            email,
+            password,
+            date_of_birth,
+            address
+        } = req.body;
 
-        const { full_name, mobile, email, password, date_of_birth, address} = req.body;
-
-        //validate the fields
-        if(!full_name || !email || !password){
+        // Validate fields
+        if (!full_name || !email || !password) {
             return res.status(400).json({
-                success:false,
-                message:"Full name,email,password are required"
+                success: false,
+                message: "Full name, email, password are required"
             });
         }
 
-        //check  whether mobile already exists
-        const [existingEmail] = await db.query("select id from users where email= ?",[email]);
-
-        if(existingEmail.length > 0){
-            return res.status(409).json({
-                success:false,
-                message:"Email already registered"
-            });
-        }
-
-        //hash password
-        const hashedPassword = await bcrypt.hash(password, 10);
-
-        //default role = player
-        const roleId = 3;
-        const [result] = await db.query(`INSERT INTO users(full_name,mobile,email,password,date_of_birth,address,role_id)VALUES(?,?,?,?,?,?,?)`,[full_name,mobile,email || null, hashedPassword,date_of_birth || null, address || null, roleId]);
+        // Always create Player
+        const user = await createUserRecord({
+            full_name,
+            mobile,
+            email,
+            password,
+            date_of_birth,
+            address,
+            role_id: 3
+        });
 
         return res.status(201).json({
-            success:true,
-            message:"user Registered successfully",
-            user:{
-                id: result.insertId,
-                full_name,
-                mobile,
-                email:email||null,
-                role_id:roleId
-            }
+            success: true,
+            message: "User registered successfully",
+            user
         });
-    }catch(error){
-        console.log("Registeration Error:",error);
+
+    } catch (error) {
+        console.error("Registration Error:", error);
+
+        if (error.statusCode) {
+            return res.status(error.statusCode).json({
+                success: false,
+                message: error.message
+            });
+        }
+
         return res.status(500).json({
-            success:false,
-            message:"Server error during registeration"
+            success: false,
+            message: "Server error during registration"
         });
     }
 };

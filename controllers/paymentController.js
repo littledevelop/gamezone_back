@@ -601,17 +601,179 @@ const getPaymentById = async (
 };
 
 
+
 // ==================================================
 // CREATE PAYMENT
-// ADMIN + STAFF
+// ADMIN + STAFF + PLAYER
 // ==================================================
 
-const createPayment = async (
-    req,
-    res
-) => {
-
+const createPayment = async (req, res) => {
     try {
+        const role = req.user?.role_name;
+        const loggedInUserId = Number(req.user?.id);
+
+        // ==================================================
+        // PLAYER PAYMENT
+        // ==================================================
+
+        if (role === "Player") {
+            const { booking_id } = req.body;
+
+            if (!isPositiveInteger(booking_id)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Valid Booking ID is required"
+                });
+            }
+
+            const bookingId = Number(booking_id);
+
+            // ----------------------------------------------
+            // GET PLAYER'S BOOKING
+            // ----------------------------------------------
+
+            const [bookings] = await db.query(
+                `
+                SELECT
+                    id,
+                    user_id,
+                    amount,
+                    status,
+                    payment_status
+                FROM bookings
+                WHERE id = ?
+                AND user_id = ?
+                `,
+                [bookingId, loggedInUserId]
+            );
+
+            if (bookings.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Booking not found"
+                });
+            }
+
+            const booking = bookings[0];
+
+            // ----------------------------------------------
+            // CHECK BOOKING STATUS
+            // ----------------------------------------------
+
+            if (
+                booking.status === "cancelled" ||
+                booking.status === "completed"
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Payment is not allowed for this booking"
+                });
+            }
+
+            // ----------------------------------------------
+            // CHECK PAYMENT STATUS
+            // ----------------------------------------------
+
+            if (booking.payment_status === "paid") {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Payment has already been completed for this booking"
+                });
+            }
+
+            // ----------------------------------------------
+            // CHECK EXISTING COMPLETED PAYMENT
+            // ----------------------------------------------
+
+            const [existingPayments] = await db.query(
+                `
+                SELECT id
+                FROM payments
+                WHERE booking_id = ?
+                AND payment_status = 'completed'
+                LIMIT 1
+                `,
+                [bookingId]
+            );
+
+            if (existingPayments.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Payment has already been completed for this booking"
+                });
+            }
+
+            // ----------------------------------------------
+            // CREATE PLAYER PAYMENT
+            // ----------------------------------------------
+
+            const paymentAmount =
+                Number(booking.amount);
+
+            const paymentMethod = "online";
+
+            const paymentStatus = "completed";
+
+            const transactionId =
+                `DEMO-${Date.now()}-${bookingId}`;
+
+            const [result] = await db.query(
+                `
+                INSERT INTO payments (
+                    user_id,
+                    booking_id,
+                    membership_id,
+                    amount,
+                    payment_method,
+                    transaction_id,
+                    payment_status,
+                    notes
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                `,
+                [
+                    loggedInUserId,
+                    bookingId,
+                    null,
+                    paymentAmount,
+                    paymentMethod,
+                    transactionId,
+                    paymentStatus,
+                    "Demo online payment"
+                ]
+            );
+
+            // ----------------------------------------------
+            // PAYMENT SUCCESS
+            // → BOOKING PAID + CONFIRMED
+            // ----------------------------------------------
+
+            await db.query(
+                `
+                UPDATE bookings
+                SET
+                    payment_status = 'paid',
+                    status = 'confirmed'
+                WHERE id = ?
+                AND user_id = ?
+                `,
+                [bookingId, loggedInUserId]
+            );
+
+            return res.status(201).json({
+                success: true,
+                message:
+                    "Payment completed successfully. Booking confirmed.",
+                payment_id: result.insertId
+            });
+        }
+
+        // ==================================================
+        // ADMIN / STAFF PAYMENT
+        // ==================================================
 
         const {
             user_id,
@@ -624,10 +786,9 @@ const createPayment = async (
             notes
         } = req.body;
 
-
-        // ------------------------------------------
+        // ----------------------------------------------
         // VALIDATE
-        // ------------------------------------------
+        // ----------------------------------------------
 
         const validationError =
             await validatePayment(
@@ -635,27 +796,18 @@ const createPayment = async (
                 true
             );
 
-
         if (validationError) {
-
             return res.status(400).json({
-
                 success: false,
-
-                message:
-                    validationError
-
+                message: validationError
             });
         }
 
-
-        // ------------------------------------------
+        // ----------------------------------------------
         // NORMALIZE
-        // ------------------------------------------
+        // ----------------------------------------------
 
-        const userId =
-            Number(user_id);
-
+        const userId = Number(user_id);
 
         const bookingId =
             booking_id === undefined ||
@@ -664,7 +816,6 @@ const createPayment = async (
                 ? null
                 : Number(booking_id);
 
-
         const membershipId =
             membership_id === undefined ||
             membership_id === null ||
@@ -672,16 +823,11 @@ const createPayment = async (
                 ? null
                 : Number(membership_id);
 
-
         const paymentAmount =
             Number(amount);
 
-
         const paymentMethod =
-            normalizeString(
-                payment_method
-            );
-
+            normalizeString(payment_method);
 
         const paymentStatus =
             payment_status === undefined ||
@@ -692,16 +838,12 @@ const createPayment = async (
                     payment_status
                 );
 
-
         const transactionId =
             transaction_id === undefined ||
             transaction_id === null ||
             transaction_id === ""
                 ? null
-                : String(
-                    transaction_id
-                ).trim();
-
+                : String(transaction_id).trim();
 
         const paymentNotes =
             notes === undefined ||
@@ -710,13 +852,11 @@ const createPayment = async (
                 ? null
                 : notes;
 
-
-        // ------------------------------------------
-        // EXTRA BOOKING CHECK
-        // ------------------------------------------
+        // ----------------------------------------------
+        // BOOKING CHECK
+        // ----------------------------------------------
 
         if (bookingId) {
-
             const [booking] =
                 await db.query(
                     `
@@ -732,60 +872,39 @@ const createPayment = async (
                     [bookingId]
                 );
 
-
-            if (
-                booking.length === 0
-            ) {
-
+            if (booking.length === 0) {
                 return res.status(404).json({
-
                     success: false,
-
-                    message:
-                        "Booking Not Found"
-
+                    message: "Booking Not Found"
                 });
             }
-
 
             if (
                 Number(booking[0].user_id) !==
                 userId
             ) {
-
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         "Booking does not belong to selected player"
-
                 });
             }
-
-
-            // Prevent payment amount mismatch
 
             if (
                 Number(booking[0].amount) !==
                 paymentAmount
             ) {
-
                 return res.status(400).json({
-
                     success: false,
-
                     message:
                         `Payment amount must match booking amount of ₹${booking[0].amount}`
-
                 });
             }
         }
 
-
-        // ------------------------------------------
+        // ----------------------------------------------
         // INSERT PAYMENT
-        // ------------------------------------------
+        // ----------------------------------------------
 
         const [result] =
             await db.query(
@@ -814,18 +933,14 @@ const createPayment = async (
                 ]
             );
 
-
-        // ------------------------------------------
+        // ----------------------------------------------
         // COMPLETED PAYMENT
-        // → BOOKING PAID + CONFIRMED
-        // ------------------------------------------
+        // ----------------------------------------------
 
         if (
             bookingId &&
-            paymentStatus ===
-                "completed"
+            paymentStatus === "completed"
         ) {
-
             await db.query(
                 `
                 UPDATE bookings
@@ -838,17 +953,12 @@ const createPayment = async (
             );
         }
 
-
         return res.status(201).json({
-
             success: true,
-
             message:
                 "Payment Created Successfully",
-
             payment_id:
                 result.insertId
-
         });
 
     } catch (error) {
@@ -858,33 +968,25 @@ const createPayment = async (
             error.message
         );
 
-
         if (
             error.code ===
             "ER_DUP_ENTRY"
         ) {
-
             return res.status(409).json({
-
                 success: false,
-
                 message:
                     "Transaction ID already exists"
-
             });
         }
 
-
         return res.status(500).json({
-
             success: false,
-
             message:
                 "Server error while creating payment"
-
         });
     }
 };
+
 
 
 // ==================================================

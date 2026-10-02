@@ -52,7 +52,7 @@ router.get(
 router.post(
     "/",
     authMiddleware,
-    roleMiddleware("Admin", "Staff"),
+    roleMiddleware("Admin", "Staff","Player"),
     createPayment
 );
 
