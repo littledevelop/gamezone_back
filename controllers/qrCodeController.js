@@ -338,8 +338,71 @@ const deleteExpiredVideo = async (req, res) => {
     }
 };
 
+const getLatestActiveVideoQR = async (req, res) => {
+    try {
+        const [rows] = await db.query(
+            `
+            SELECT
+                qr.qr_code,
+                qr.expires_at,
+                vr.id AS video_recording_id,
+                vr.file_name,
+                gs.user_id,
+                u.full_name AS player_name,
+                g.game_name,
+                st.station_name
+            FROM qr_codes qr
+
+            INNER JOIN video_recordings vr
+                ON qr.video_recording_id = vr.id
+
+            INNER JOIN game_sessions gs
+                ON qr.game_session_id = gs.id
+
+            INNER JOIN users u
+                ON gs.user_id = u.id
+
+            INNER JOIN games g
+                ON gs.game_id = g.id
+
+            INNER JOIN gaming_stations st
+                ON gs.station_id = st.id
+
+            WHERE qr.qr_type = 'video'
+              AND qr.status = 'active'
+              AND qr.expires_at > NOW()
+
+            ORDER BY qr.id DESC
+            LIMIT 1
+            `
+        );
+
+        if (rows.length === 0) {
+            return res.json({
+                success: true,
+                data: null,
+                message: "No active QR code available",
+            });
+        }
+
+        res.json({
+            success: true,
+            data: rows[0],
+        });
+
+    } catch (error) {
+        console.error("Get latest active QR error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to load latest QR code",
+        });
+    }
+};
+
 module.exports = {
     createVideoQRCode,
     getVideoByQRCode,
     deleteExpiredVideo,
+    getLatestActiveVideoQR,
 };

@@ -6,6 +6,7 @@ const {
     createVideoQRCode,
     getVideoByQRCode,
     deleteExpiredVideo,
+    getLatestActiveVideoQR,
 } = require("../controllers/qrCodeController");
 
 const authMiddleware = require("../middleware/authMiddleware");
@@ -19,12 +20,19 @@ router.post(
     createVideoQRCode
 );
 
+// Latest active QR - public
+router.get(
+    "/latest",
+    getLatestActiveVideoQR
+);
+
 // Scan QR - public
 router.get(
     "/video/:qrCode",
     getVideoByQRCode
 );
 
+// Delete expired video - Admin/Staff only
 router.delete(
     "/video/expired/:qrCode",
     authMiddleware,
