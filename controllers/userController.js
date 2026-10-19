@@ -39,6 +39,7 @@ const getUsers = async (req, res) => {
         u.mobile,
         u.email,
         u.role_id,
+        u.assigned_game_id,
         r.role_name
       FROM users u
       INNER JOIN roles r ON u.role_id = r.id

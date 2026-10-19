@@ -60,4 +60,43 @@ router.post(
     upload.single("video"),
     uploadVideoToCloudinary
 );
+
+
+// Internal upload authentication for the camera service
+const cameraServiceAuth = (req, res, next) => {
+    const expectedSecret = process.env.CAMERA_SERVICE_SECRET;
+    const providedSecret = req.get("x-camera-service-secret");
+
+    if (!expectedSecret) {
+        console.error("CAMERA_SERVICE_SECRET is not configured");
+
+        return res.status(500).json({
+            success: false,
+            message: "Camera service authentication is not configured"
+        });
+    }
+
+    if (
+        !providedSecret ||
+        providedSecret !== expectedSecret
+    ) {
+        return res.status(401).json({
+            success: false,
+            message: "Unauthorized camera service"
+        });
+    }
+
+    req.cameraService = true;
+    next();
+};
+
+// Automatic upload from the local camera service
+router.post(
+    "/internal-upload",
+    cameraServiceAuth,
+    upload.single("video"),
+    uploadVideoToCloudinary
+);
+
+
 module.exports = router;

@@ -577,8 +577,9 @@ const uploadVideoToCloudinary = async (req, res) => {
 
         // Player can only upload for own session
         if (
-            req.user.role_name === "Player" &&
-            Number(sessions[0].user_id) !== Number(req.user.id)
+             !req.cameraService &&
+    req.user.role_name === "Player" &&
+    Number(sessions[0].user_id) !== Number(req.user.id)
         ) {
             return res.status(403).json({
                 success: false,

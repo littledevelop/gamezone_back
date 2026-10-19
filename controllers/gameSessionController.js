@@ -1,80 +1,109 @@
+
 const db = require("../config/db");
 
 // =====================================================
-// HELPER FUNCTIONS
+// VALIDATION HELPERS
 // =====================================================
 
-// CHECK POSITIVE INTEGER
 const isPositiveInteger = (value) => {
+    if (
+        value === null ||
+        value === undefined ||
+        typeof value === "boolean" ||
+        (typeof value === "string" && value.trim() === "")
+    ) {
+        return false;
+    }
+
     const number = Number(value);
-    return Number.isInteger(number) && number > 0;
+    return Number.isSafeInteger(number) && number > 0;
 };
 
-// CHECK NON-NEGATIVE INTEGER
 const isNonNegativeInteger = (value) => {
+    if (
+        value === null ||
+        value === undefined ||
+        typeof value === "boolean" ||
+        (typeof value === "string" && value.trim() === "")
+    ) {
+        return false;
+    }
+
     const number = Number(value);
-    return Number.isInteger(number) && number >= 0;
+    return Number.isSafeInteger(number) && number >= 0;
+};
+
+const hasField = (object, field) =>
+    Object.prototype.hasOwnProperty.call(object, field);
+
+const isEmpty = (value) =>
+    value === undefined || value === null || value === "";
+
+const normalizeStatus = (value) =>
+    typeof value === "string" ? value.trim().toLowerCase() : value;
+
+const isValidAmount = (value) => {
+    if (
+        value === null ||
+        value === undefined ||
+        typeof value === "boolean" ||
+        (typeof value === "string" && value.trim() === "")
+    ) {
+        return false;
+    }
+
+    const amount = Number(value);
+
+    return (
+        Number.isFinite(amount) &&
+        amount >= 0 &&
+        amount <= 99999999.99 &&
+        Math.round(amount * 100) === amount * 100
+    );
 };
 
 // =====================================================
 // DATE / TIME HELPERS
 // =====================================================
 
-// Supports:
-// YYYY-MM-DD HH:MM:SS
-// YYYY-MM-DDTHH:MM:SS
-// YYYY-MM-DDTHH:MM:SS.000Z
-// JavaScript Date object
 const parseDateTime = (value) => {
-
     if (value instanceof Date) {
-        return Number.isNaN(value.getTime())
-            ? null
-            : value;
+        return Number.isNaN(value.getTime()) ? null : value;
     }
 
     if (typeof value !== "string") {
         return null;
     }
 
-    const valueString = value.trim();
+    const input = value.trim();
 
-    // MySQL DATETIME
-    const mysqlMatch = valueString.match(
+    // MySQL DATETIME: YYYY-MM-DD HH:mm:ss
+    const mysqlMatch = input.match(
         /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/
     );
 
     if (mysqlMatch) {
-
-        const year = Number(mysqlMatch[1]);
-        const month = Number(mysqlMatch[2]);
-        const day = Number(mysqlMatch[3]);
-        const hour = Number(mysqlMatch[4]);
-        const minute = Number(mysqlMatch[5]);
-        const second = Number(mysqlMatch[6]);
+        const [, y, mo, d, h, mi, s] = mysqlMatch;
+        const parts = [y, mo, d, h, mi, s].map(Number);
 
         const date = new Date(
             Date.UTC(
-                year,
-                month - 1,
-                day,
-                hour,
-                minute,
-                second
+                parts[0],
+                parts[1] - 1,
+                parts[2],
+                parts[3],
+                parts[4],
+                parts[5]
             )
         );
 
-        if (Number.isNaN(date.getTime())) {
-            return null;
-        }
-
         if (
-            date.getUTCFullYear() !== year ||
-            date.getUTCMonth() !== month - 1 ||
-            date.getUTCDate() !== day ||
-            date.getUTCHours() !== hour ||
-            date.getUTCMinutes() !== minute ||
-            date.getUTCSeconds() !== second
+            date.getUTCFullYear() !== parts[0] ||
+            date.getUTCMonth() !== parts[1] - 1 ||
+            date.getUTCDate() !== parts[2] ||
+            date.getUTCHours() !== parts[3] ||
+            date.getUTCMinutes() !== parts[4] ||
+            date.getUTCSeconds() !== parts[5]
         ) {
             return null;
         }
@@ -82,58 +111,37 @@ const parseDateTime = (value) => {
         return date;
     }
 
-    // ISO format
+    // ISO timestamp with an explicit UTC marker or offset.
     if (
-        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(valueString) ||
-        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(valueString)
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(
+            input
+        )
     ) {
+        const date = new Date(input);
+        return Number.isNaN(date.getTime()) ? null : date;
+    }
 
-        const date = new Date(valueString);
-
-        if (Number.isNaN(date.getTime())) {
-            return null;
-        }
-
-        return date;
+    // ISO timestamp without timezone: treat consistently as UTC.
+    if (
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?$/.test(
+            input
+        )
+    ) {
+        return parseDateTime(input.replace("T", " ").slice(0, 19));
     }
 
     return null;
 };
 
-// VALIDATE DATE/TIME
-const isValidDateTime = (value) => {
-    return parseDateTime(value) !== null;
-};
+const isValidDateTime = (value) => parseDateTime(value) !== null;
 
-// NORMALIZE DATE/TIME FOR MYSQL
 const normalizeDateTimeForDb = (value) => {
-
-    if (
-        value === null ||
-        value === undefined ||
-        value === ""
-    ) {
-        return null;
-    }
-
-    // Already MySQL DATETIME
-    if (
-        typeof value === "string" &&
-        /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(
-            value.trim()
-        )
-    ) {
-        return value.trim();
-    }
+    if (isEmpty(value)) return null;
 
     const date = parseDateTime(value);
+    if (!date) return null;
 
-    if (!date) {
-        return null;
-    }
-
-    const pad = (number) =>
-        String(number).padStart(2, "0");
+    const pad = (n) => String(n).padStart(2, "0");
 
     return (
         `${date.getUTCFullYear()}-` +
@@ -145,89 +153,87 @@ const normalizeDateTimeForDb = (value) => {
     );
 };
 
-// CALCULATE DURATION
-const calculateDuration = (
-    startTime,
-    endTime
-) => {
-
+const calculateDuration = (startTime, endTime) => {
     const start = parseDateTime(startTime);
     const end = parseDateTime(endTime);
 
-    if (!start || !end) {
-        return null;
-    }
-
-    const difference =
-        end.getTime() - start.getTime();
-
-    if (difference < 0) {
+    if (!start || !end || end.getTime() < start.getTime()) {
         return null;
     }
 
     return Math.round(
-        difference / (1000 * 60)
+        (end.getTime() - start.getTime()) / 60000
     );
 };
 
-// CALCULATE DURATION FROM TIME VALUES
-// Example: 16:43:00 -> 23:50:00 = 427 minutes
 const calculateTimeDuration = (startTime, endTime) => {
-    if (!startTime || !endTime) {
-        return null;
-    }
+    if (isEmpty(startTime) || isEmpty(endTime)) return null;
 
-    const startParts = String(startTime)
-        .substring(0, 8)
-        .split(":")
-        .map(Number);
+    const parseTime = (value) => {
+        const match = String(value).match(
+            /^(\d{2}):(\d{2}):(\d{2})$/
+        );
 
-    const endParts = String(endTime)
-        .substring(0, 8)
-        .split(":")
-        .map(Number);
+        if (!match) return null;
 
+        const [, h, m, s] = match;
+        const hours = Number(h);
+        const minutes = Number(m);
+        const seconds = Number(s);
+
+        if (
+            hours > 23 ||
+            minutes > 59 ||
+            seconds > 59
+        ) {
+            return null;
+        }
+
+        return hours * 60 + minutes + seconds / 60;
+    };
+
+    const start = parseTime(startTime);
+    const end = parseTime(endTime);
+
+    if (start === null || end === null) return null;
+
+    let duration = end - start;
+    if (duration < 0) duration += 24 * 60;
+
+    return Math.round(duration);
+};
+
+// =====================================================
+// AUTHORIZATION HELPERS
+// =====================================================
+
+const isAdminOrStaff = (req) =>
+    ["Admin", "Staff"].includes(req.user?.role_name);
+
+const validateStaffAssignment = (req) => {
     if (
-        startParts.length !== 3 ||
-        endParts.length !== 3 ||
-        startParts.some(Number.isNaN) ||
-        endParts.some(Number.isNaN)
+        req.user?.role_name === "Staff" &&
+        !isPositiveInteger(req.user.assigned_game_id)
     ) {
-        return null;
+        return false;
     }
 
-    const startMinutes =
-        startParts[0] * 60 +
-        startParts[1];
+    return true;
+};
 
-    const endMinutes =
-        endParts[0] * 60 +
-        endParts[1];
+const staffCanAccessGame = (req, gameId) => {
+    if (req.user?.role_name === "Admin") return true;
 
-    let difference =
-        endMinutes - startMinutes;
-
-    // Handles overnight bookings
-    if (difference < 0) {
-        difference += 24 * 60;
-    }
-
-    return difference;
+    return (
+        req.user?.role_name === "Staff" &&
+        isPositiveInteger(req.user.assigned_game_id) &&
+        Number(req.user.assigned_game_id) === Number(gameId)
+    );
 };
 
 // =====================================================
 // BOOKING HELPERS
-// =====================================================
-
-// FIND MATCHING BOOKING
-//
-// This allows the current database structure to work
-// without adding booking_id to game_sessions.
-//
-// Priority:
-// 1. Exact booking_id when supplied.
-// 2. Otherwise match by:
-//    user + game + station + booking date + time
+// game_sessions does not contain a booking_id column.
 // =====================================================
 
 const findMatchingBooking = async (
@@ -240,373 +246,94 @@ const findMatchingBooking = async (
         start_time
     }
 ) => {
+    if (!isValidDateTime(start_time)) return null;
 
-    const bookingDate =
-        String(start_time).substring(0, 10);
+    const normalizedStart = normalizeDateTimeForDb(start_time);
+    const bookingDate = normalizedStart.substring(0, 10);
+    const bookingTime = normalizedStart.substring(11, 19);
 
-    const bookingStartTime =
-        String(start_time).substring(11, 19);
+    const selectSql = `
+        SELECT
+            id,
+            user_id,
+            membership_id,
+            game_id,
+            station_id,
+            booking_date,
+            start_time,
+            end_time,
+            status,
+            payment_status,
+            amount
+        FROM bookings
+    `;
 
-    // -------------------------------------------------
-    // EXACT BOOKING
-    // -------------------------------------------------
+    // Exact booking requested by the frontend.
+    if (!isEmpty(booking_id)) {
+        if (!isPositiveInteger(booking_id)) return null;
 
-    if (
-        booking_id !== undefined &&
-        booking_id !== null &&
-        booking_id !== ""
-    ) {
+        const [rows] = await connection.query(
+            `${selectSql} WHERE id = ? LIMIT 1`,
+            [Number(booking_id)]
+        );
 
-        const [bookings] =
-            await connection.query(
-                `
-                SELECT
-                    id,
-                    user_id,
-                    membership_id,
-                    game_id,
-                    station_id,
-                    booking_date,
-                    start_time,
-                    end_time,
-                    status,
-                    payment_status,
-                    amount
-                FROM bookings
-                WHERE id = ?
-                LIMIT 1
-                `,
-                [Number(booking_id)]
-            );
+        if (!rows.length) return null;
 
-        if (bookings.length === 0) {
-            return null;
-        }
-
-        const booking = bookings[0];
+        const booking = rows[0];
 
         if (
             Number(booking.user_id) !== Number(user_id) ||
             Number(booking.game_id) !== Number(game_id) ||
-            Number(booking.station_id) !== Number(station_id)
+            Number(booking.station_id) !== Number(station_id) ||
+            booking.status !== "confirmed" ||
+            String(booking.booking_date).slice(0, 10) !== bookingDate
         ) {
             return null;
         }
 
-        if (booking.status !== "confirmed") {
+        const start = String(booking.start_time).slice(0, 8);
+        const end = String(booking.end_time).slice(0, 8);
+
+        // A session must start inside the booked time slot.
+        if (!(start <= bookingTime && end > bookingTime)) {
             return null;
         }
 
         return booking;
     }
 
-    // -------------------------------------------------
-    // AUTOMATIC BOOKING MATCH
-    // -------------------------------------------------
+    // Automatic matching when booking_id is not supplied.
+    const [rows] = await connection.query(
+        `
+        ${selectSql}
+        WHERE user_id = ?
+          AND game_id = ?
+          AND station_id = ?
+          AND booking_date = ?
+          AND status = 'confirmed'
+          AND start_time <= ?
+          AND end_time > ?
+        ORDER BY id DESC
+        LIMIT 1
+        `,
+        [
+            Number(user_id),
+            Number(game_id),
+            Number(station_id),
+            bookingDate,
+            bookingTime,
+            bookingTime
+        ]
+    );
 
-    const [bookings] =
-        await connection.query(
-            `
-            SELECT
-                id,
-                user_id,
-                membership_id,
-                game_id,
-                station_id,
-                booking_date,
-                start_time,
-                end_time,
-                status,
-                payment_status,
-                amount
-            FROM bookings
-            WHERE user_id = ?
-              AND game_id = ?
-              AND station_id = ?
-              AND booking_date = ?
-              AND status = 'confirmed'
-              AND start_time <= ?
-              AND end_time > ?
-            ORDER BY id DESC
-            LIMIT 1
-            `,
-            [
-                Number(user_id),
-                Number(game_id),
-                Number(station_id),
-                bookingDate,
-                bookingStartTime,
-                bookingStartTime
-            ]
-        );
-
-    return bookings.length > 0
-        ? bookings[0]
-        : null;
-};
-
-// =====================================================
-// GET ALL GAME SESSIONS
-// =====================================================
-
-const getAllGameSessions = async (
-    req,
-    res
-) => {
-
-    try {
-
-        let query = `
-            SELECT
-                gs.id,
-                gs.user_id,
-                u.full_name AS user_name,
-
-                gs.game_id,
-                g.game_name,
-
-                gs.station_id,
-                st.station_name,
-
-                gs.start_time,
-                gs.end_time,
-                gs.duration_minutes,
-                gs.amount,
-                gs.status,
-                gs.recording_status,
-                gs.video_file_id,
-                gs.notes,
-                gs.created_at,
-                gs.updated_at
-
-            FROM game_sessions gs
-
-            INNER JOIN users u
-                ON gs.user_id = u.id
-
-            INNER JOIN games g
-                ON gs.game_id = g.id
-
-            INNER JOIN gaming_stations st
-                ON gs.station_id = st.id
-        `;
-
-        const queryParams = [];
-
-        // Player sees only own sessions
-        if (
-            req.user &&
-            req.user.role_name === "Player"
-        ) {
-
-            query += `
-                WHERE gs.user_id = ?
-            `;
-
-            queryParams.push(req.user.id);
-        }
-
-        query += `
-            ORDER BY gs.id DESC
-        `;
-
-        const [gameSessions] =
-            await db.query(
-                query,
-                queryParams
-            );
-
-        return res.status(200).json({
-            success: true,
-            data: gameSessions
-        });
-
-    } catch (error) {
-
-        console.log(
-            "Get Game Sessions Error:",
-            error.message
-        );
-
-        return res.status(500).json({
-            success: false,
-            message:
-                "Server error while fetching game sessions"
-        });
-    }
-};
-// =====================================================
-// GET GAME SESSION BY ID
-// =====================================================
-
-const getGameSessionById = async (
-    req,
-    res
-) => {
-    try {
-        const { id } = req.params;
-
-        if (!isPositiveInteger(id)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid Game Session ID"
-            });
-        }
-
-        let query = `
-            SELECT
-                gs.id,
-                gs.user_id,
-                u.full_name AS user_name,
-
-                gs.game_id,
-                g.game_name,
-
-                gs.station_id,
-                st.station_name,
-
-                gs.start_time,
-                gs.end_time,
-                gs.duration_minutes,
-                gs.amount,
-                gs.status,
-
-                gs.recording_status,
-                gs.video_file_id,
-                gs.notes,
-                gs.created_at,
-                gs.updated_at,
-
-                vr.id AS video_recording_id,
-                vr.file_name AS video_file_name,
-                vr.cloudinary_url AS video_url,
-                vr.cloudinary_public_id,
-                vr.file_size AS video_file_size,
-                vr.duration_seconds AS video_duration_seconds,
-                vr.recording_status AS video_recording_status,
-                vr.recorded_at
-
-            FROM game_sessions gs
-
-            INNER JOIN users u
-                ON gs.user_id = u.id
-
-            INNER JOIN games g
-                ON gs.game_id = g.id
-
-            INNER JOIN gaming_stations st
-                ON gs.station_id = st.id
-
-            LEFT JOIN video_recordings vr
-                ON vr.id = (
-                    SELECT vr2.id
-                    FROM video_recordings vr2
-                    WHERE vr2.session_id = gs.id
-                      AND vr2.recording_status = 'completed'
-                    ORDER BY vr2.id DESC
-                    LIMIT 1
-                )
-
-            WHERE gs.id = ?
-        `;
-
-        const queryParams = [Number(id)];
-
-        // Player can view only own session
-        if (
-            req.user &&
-            req.user.role_name === "Player"
-        ) {
-            query += `
-                AND gs.user_id = ?
-            `;
-
-            queryParams.push(req.user.id);
-        }
-
-        const [gameSessions] = await db.query(
-            query,
-            queryParams
-        );
-
-        if (gameSessions.length === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "Game Session Not Found"
-            });
-        }
-
-        const session = gameSessions[0];
-
-        // -------------------------------------------------
-        // BUILD RECORDING OBJECT
-        // -------------------------------------------------
-
-        let recording = null;
-
-        if (session.video_recording_id) {
-            recording = {
-                id: session.video_recording_id,
-                file_name: session.video_file_name,
-                video_url: session.video_url,
-                cloudinary_public_id:
-                    session.cloudinary_public_id,
-                file_size: session.video_file_size,
-                duration_seconds:
-                    session.video_duration_seconds,
-                recording_status:
-                    session.video_recording_status,
-                recorded_at: session.recorded_at
-            };
-        }
-
-        // -------------------------------------------------
-        // REMOVE FLAT RECORDING FIELDS FROM RESPONSE
-        // -------------------------------------------------
-
-        delete session.video_recording_id;
-        delete session.video_file_name;
-        delete session.video_url;
-        delete session.cloudinary_public_id;
-        delete session.video_file_size;
-        delete session.video_duration_seconds;
-        delete session.video_recording_status;
-        delete session.recorded_at;
-
-        // -------------------------------------------------
-        // RESPONSE
-        // -------------------------------------------------
-
-        return res.status(200).json({
-            success: true,
-            data: {
-                ...session,
-                recording
-            }
-        });
-
-    } catch (error) {
-        console.log(
-            "Get Game Session By ID Error:",
-            error.message
-        );
-
-        return res.status(500).json({
-            success: false,
-            message:
-                "Server error while fetching game session"
-        });
-    }
+    return rows.length ? rows[0] : null;
 };
 
 // =====================================================
 // VALIDATE GAME SESSION DATA
 // =====================================================
 
-const validateGameSession = async (
-    data
-) => {
-
+const validateGameSession = async (data) => {
     const {
         user_id,
         game_id,
@@ -621,303 +348,372 @@ const validateGameSession = async (
         notes
     } = data;
 
-    // -------------------------------------------------
-    // USER
-    // -------------------------------------------------
-
-    if (
-        user_id !== undefined &&
-        user_id !== null &&
-        user_id !== ""
-    ) {
-
-        const userId = Number(user_id);
-
-        if (!isPositiveInteger(userId)) {
+    if (!isEmpty(user_id)) {
+        if (!isPositiveInteger(user_id)) {
             return "Invalid User ID";
         }
 
-        const [users] =
-            await db.query(
-                `
-                SELECT u.id
-                FROM users u
-                INNER JOIN roles r
-                    ON u.role_id = r.id
-                WHERE u.id = ?
-                  AND r.role_name = 'Player'
-                `,
-                [userId]
-            );
+        const [rows] = await db.query(
+            `
+            SELECT u.id
+            FROM users u
+            INNER JOIN roles r ON r.id = u.role_id
+            WHERE u.id = ?
+              AND r.role_name = 'Player'
+            LIMIT 1
+            `,
+            [Number(user_id)]
+        );
 
-        if (users.length === 0) {
+        if (!rows.length) {
             return "user_id does not exist or is not a Player";
         }
     }
 
-    // -------------------------------------------------
-    // GAME
-    // -------------------------------------------------
-
-    if (
-        game_id !== undefined &&
-        game_id !== null &&
-        game_id !== ""
-    ) {
-
-        const gameId = Number(game_id);
-
-        if (!isPositiveInteger(gameId)) {
+    if (!isEmpty(game_id)) {
+        if (!isPositiveInteger(game_id)) {
             return "Invalid Game ID";
         }
 
-        const [games] =
-            await db.query(
-                `
-                SELECT id, status
-                FROM games
-                WHERE id = ?
-                `,
-                [gameId]
-            );
+        const [rows] = await db.query(
+            "SELECT id, status FROM games WHERE id = ? LIMIT 1",
+            [Number(game_id)]
+        );
 
-        if (games.length === 0) {
-            return "Invalid Game";
-        }
+        if (!rows.length) return "Invalid Game";
 
-        if (games[0].status !== "active") {
+        if (rows[0].status !== "active") {
             return "Selected game is inactive";
         }
     }
 
-    // -------------------------------------------------
-    // STATION
-    // -------------------------------------------------
-
-    if (
-        station_id !== undefined &&
-        station_id !== null &&
-        station_id !== ""
-    ) {
-
-        const stationId =
-            Number(station_id);
-
-        if (!isPositiveInteger(stationId)) {
+    if (!isEmpty(station_id)) {
+        if (!isPositiveInteger(station_id)) {
             return "Invalid Gaming Station ID";
         }
 
-        const [stations] =
-            await db.query(
-                `
-                SELECT
-                    id,
-                    status
-                FROM gaming_stations
-                WHERE id = ?
-                `,
-                [stationId]
-            );
+        const [rows] = await db.query(
+            "SELECT id, status FROM gaming_stations WHERE id = ? LIMIT 1",
+            [Number(station_id)]
+        );
 
-        if (stations.length === 0) {
-            return "Invalid Gaming Station";
-        }
+        if (!rows.length) return "Invalid Gaming Station";
 
         if (
-            ["maintenance", "inactive"]
-                .includes(stations[0].status)
+            ["maintenance", "inactive"].includes(rows[0].status)
         ) {
             return "Selected gaming station is unavailable";
         }
     }
 
-    // -------------------------------------------------
-    // START TIME
-    // -------------------------------------------------
-
-    if (
-        start_time !== undefined &&
-        start_time !== null &&
-        start_time !== ""
-    ) {
-
-        if (!isValidDateTime(start_time)) {
-            return "Start time must be a valid date and time";
-        }
+    if (!isEmpty(start_time) && !isValidDateTime(start_time)) {
+        return "Start time must be a valid date and time";
     }
 
-    // -------------------------------------------------
-    // END TIME
-    // -------------------------------------------------
-
-    if (
-        end_time !== undefined &&
-        end_time !== null &&
-        end_time !== ""
-    ) {
-
-        if (!isValidDateTime(end_time)) {
-            return "End time must be a valid date and time";
-        }
+    if (!isEmpty(end_time) && !isValidDateTime(end_time)) {
+        return "End time must be a valid date and time";
     }
 
-    // -------------------------------------------------
-    // DURATION
-    // -------------------------------------------------
-
     if (
-        duration_minutes !== undefined &&
-        duration_minutes !== null &&
-        duration_minutes !== ""
+        !isEmpty(duration_minutes) &&
+        !isNonNegativeInteger(duration_minutes)
     ) {
-
-        if (
-            !isNonNegativeInteger(
-                duration_minutes
-            )
-        ) {
-            return "Duration must be a non-negative integer";
-        }
+        return "Duration must be a non-negative integer";
     }
 
-    // -------------------------------------------------
-    // AMOUNT
-    // -------------------------------------------------
-
-    if (
-        amount !== undefined &&
-        amount !== null &&
-        amount !== ""
-    ) {
-
-        const numericAmount =
-            Number(amount);
-
-        if (
-            !Number.isFinite(numericAmount) ||
-            numericAmount < 0
-        ) {
-            return "Amount must be a valid non-negative number";
-        }
-
-        if (
-            numericAmount > 99999999.99
-        ) {
-            return "Amount is too large";
-        }
-
-        if (
-            Math.round(
-                numericAmount * 100
-            ) !== numericAmount * 100
-        ) {
-            return "Amount can have maximum 2 decimal places";
-        }
+    if (!isEmpty(amount) && !isValidAmount(amount)) {
+        return "Amount must be a valid non-negative number with at most 2 decimal places";
     }
 
-    // -------------------------------------------------
-    // STATUS
-    // -------------------------------------------------
-
     if (
-        status !== undefined &&
-        status !== null &&
-        status !== ""
+        !isEmpty(status) &&
+        !["active", "completed", "cancelled"].includes(
+            normalizeStatus(status)
+        )
     ) {
-
-        const normalizedStatus =
-            String(status)
-                .trim()
-                .toLowerCase();
-
-        if (
-            ![
-                "active",
-                "completed",
-                "cancelled"
-            ].includes(normalizedStatus)
-        ) {
-            return "Status must be active, completed or cancelled";
-        }
+        return "Status must be active, completed or cancelled";
     }
 
-    // -------------------------------------------------
-    // RECORDING STATUS
-    // -------------------------------------------------
-
     if (
-        recording_status !== undefined &&
-        recording_status !== null &&
-        recording_status !== ""
+        !isEmpty(recording_status) &&
+        !["not_recorded", "recording", "completed"].includes(
+            normalizeStatus(recording_status)
+        )
     ) {
-
-        const normalizedRecordingStatus =
-            String(recording_status)
-                .trim()
-                .toLowerCase();
-
-        const validRecordingStatuses = [
-            "not_recorded",
-            "recording",
-            "completed"
-        ];
-
-        if (
-            !validRecordingStatuses.includes(
-                normalizedRecordingStatus
-            )
-        ) {
-            return "Invalid recording status";
-        }
+        return "Invalid recording status";
     }
-
-    // -------------------------------------------------
-    // VIDEO FILE ID
-    // -------------------------------------------------
 
     if (
         video_file_id !== undefined &&
-        video_file_id !== null
+        video_file_id !== null &&
+        (
+            typeof video_file_id !== "string" &&
+            typeof video_file_id !== "number"
+        )
     ) {
-
-        if (
-            String(video_file_id)
-                .trim()
-                .length > 255
-        ) {
-            return "Video file ID cannot exceed 255 characters";
-        }
+        return "Video file ID must be text";
     }
 
-    // -------------------------------------------------
-    // NOTES
-    // -------------------------------------------------
+    if (
+        video_file_id !== undefined &&
+        video_file_id !== null &&
+        String(video_file_id).trim().length > 255
+    ) {
+        return "Video file ID cannot exceed 255 characters";
+    }
 
     if (
         notes !== undefined &&
-        notes !== null
+        notes !== null &&
+        typeof notes !== "string"
     ) {
-
-        if (typeof notes !== "string") {
-            return "Notes must be text";
-        }
+        return "Notes must be text";
     }
 
     return null;
 };
 
 // =====================================================
+// GET ALL GAME SESSIONS
+// =====================================================
+
+const getAllGameSessions = async (req, res) => {
+    try {
+        const role = req.user?.role_name;
+        const params = [];
+
+        let where = "";
+
+        if (role === "Player") {
+            if (!isPositiveInteger(req.user.id)) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Invalid player account"
+                });
+            }
+
+            where = "WHERE gs.user_id = ?";
+            params.push(Number(req.user.id));
+        } else if (role === "Staff") {
+            if (!validateStaffAssignment(req)) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Staff member has no valid assigned game"
+                });
+            }
+
+            where = "WHERE gs.game_id = ?";
+            params.push(Number(req.user.assigned_game_id));
+        } else if (role !== "Admin") {
+            return res.status(403).json({
+                success: false,
+                message: "You are not authorized to view game sessions"
+            });
+        }
+
+        const [rows] = await db.query(
+            `
+            SELECT
+                gs.id,
+                gs.user_id,
+                u.full_name AS user_name,
+                gs.game_id,
+                g.game_name,
+                gs.station_id,
+                st.station_name,
+                gs.start_time,
+                gs.end_time,
+                gs.duration_minutes,
+                gs.amount,
+                gs.status,
+                gs.recording_status,
+                gs.video_file_id,
+                gs.notes,
+                gs.created_at,
+                gs.updated_at
+            FROM game_sessions gs
+            INNER JOIN users u ON u.id = gs.user_id
+            INNER JOIN games g ON g.id = gs.game_id
+            INNER JOIN gaming_stations st ON st.id = gs.station_id
+            ${where}
+            ORDER BY gs.id DESC
+            `,
+            params
+        );
+
+        return res.status(200).json({
+            success: true,
+            data: rows
+        });
+    } catch (error) {
+        console.error("Get Game Sessions Error:", error.message);
+
+        return res.status(500).json({
+            success: false,
+            message: "Server error while fetching game sessions"
+        });
+    }
+};
+
+// =====================================================
+// GET GAME SESSION BY ID
+// =====================================================
+
+const getGameSessionById = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!isPositiveInteger(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid Game Session ID"
+            });
+        }
+
+        const role = req.user?.role_name;
+        const params = [Number(id)];
+
+        let accessCondition = "";
+
+        if (role === "Player") {
+            if (!isPositiveInteger(req.user.id)) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Invalid player account"
+                });
+            }
+
+            accessCondition = "AND gs.user_id = ?";
+            params.push(Number(req.user.id));
+        } else if (role === "Staff") {
+            if (!validateStaffAssignment(req)) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Staff member has no valid assigned game"
+                });
+            }
+
+            accessCondition = "AND gs.game_id = ?";
+            params.push(Number(req.user.assigned_game_id));
+        } else if (role !== "Admin") {
+            return res.status(403).json({
+                success: false,
+                message: "You are not authorized to view game sessions"
+            });
+        }
+
+        const [rows] = await db.query(
+            `
+            SELECT
+                gs.id,
+                gs.user_id,
+                u.full_name AS user_name,
+                gs.game_id,
+                g.game_name,
+                gs.station_id,
+                st.station_name,
+                gs.start_time,
+                gs.end_time,
+                gs.duration_minutes,
+                gs.amount,
+                gs.status,
+                gs.recording_status,
+                gs.video_file_id,
+                gs.notes,
+                gs.created_at,
+                gs.updated_at,
+                vr.id AS video_recording_id,
+                vr.file_name AS video_file_name,
+                vr.cloudinary_url AS video_url,
+                vr.cloudinary_public_id,
+                vr.file_size AS video_file_size,
+                vr.duration_seconds AS video_duration_seconds,
+                vr.recording_status AS video_recording_status,
+                vr.recorded_at
+            FROM game_sessions gs
+            INNER JOIN users u ON u.id = gs.user_id
+            INNER JOIN games g ON g.id = gs.game_id
+            INNER JOIN gaming_stations st ON st.id = gs.station_id
+            LEFT JOIN video_recordings vr ON vr.id = (
+                SELECT vr2.id
+                FROM video_recordings vr2
+                WHERE vr2.session_id = gs.id
+                  AND vr2.recording_status = 'completed'
+                ORDER BY vr2.id DESC
+                LIMIT 1
+            )
+            WHERE gs.id = ?
+            ${accessCondition}
+            `,
+            params
+        );
+
+        if (!rows.length) {
+            return res.status(404).json({
+                success: false,
+                message: "Game Session Not Found"
+            });
+        }
+
+        const session = rows[0];
+
+        const recording = session.video_recording_id
+            ? {
+                id: session.video_recording_id,
+                file_name: session.video_file_name,
+                video_url: session.video_url,
+                cloudinary_public_id: session.cloudinary_public_id,
+                file_size: session.video_file_size,
+                duration_seconds: session.video_duration_seconds,
+                recording_status: session.video_recording_status,
+                recorded_at: session.recorded_at
+            }
+            : null;
+
+        delete session.video_recording_id;
+        delete session.video_file_name;
+        delete session.video_url;
+        delete session.cloudinary_public_id;
+        delete session.video_file_size;
+        delete session.video_duration_seconds;
+        delete session.video_recording_status;
+        delete session.recorded_at;
+
+        return res.status(200).json({
+            success: true,
+            data: { ...session, recording }
+        });
+    } catch (error) {
+        console.error("Get Game Session By ID Error:", error.message);
+
+        return res.status(500).json({
+            success: false,
+            message: "Server error while fetching game session"
+        });
+    }
+};
+
+// =====================================================
 // CREATE GAME SESSION
 // =====================================================
 
-const createGameSession = async (
-    req,
-    res
-) => {
-
+const createGameSession = async (req, res) => {
     let connection;
 
     try {
+        if (!isAdminOrStaff(req)) {
+            return res.status(403).json({
+                success: false,
+                message: "You are not authorized to create game sessions"
+            });
+        }
+
+        if (!validateStaffAssignment(req)) {
+            return res.status(403).json({
+                success: false,
+                message: "Staff member has no valid assigned game"
+            });
+        }
 
         const {
             user_id,
@@ -934,61 +730,21 @@ const createGameSession = async (
             notes
         } = req.body;
 
-        // -------------------------------------------------
-        // REQUIRED
-        // -------------------------------------------------
-
-        if (
-            user_id === undefined ||
-            user_id === null ||
-            user_id === ""
-        ) {
-            return res.status(400).json({
-                success: false,
-                message: "User ID is required"
-            });
+        for (const [field, value, message] of [
+            ["user_id", user_id, "User ID is required"],
+            ["game_id", game_id, "Game ID is required"],
+            ["station_id", station_id, "Gaming Station ID is required"],
+            ["start_time", start_time, "Start time is required"]
+        ]) {
+            if (isEmpty(value)) {
+                return res.status(400).json({
+                    success: false,
+                    message
+                });
+            }
         }
 
-        if (
-            game_id === undefined ||
-            game_id === null ||
-            game_id === ""
-        ) {
-            return res.status(400).json({
-                success: false,
-                message: "Game ID is required"
-            });
-        }
-
-        if (
-            station_id === undefined ||
-            station_id === null ||
-            station_id === ""
-        ) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Gaming Station ID is required"
-            });
-        }
-
-        if (
-            start_time === undefined ||
-            start_time === null ||
-            start_time === ""
-        ) {
-            return res.status(400).json({
-                success: false,
-                message: "Start time is required"
-            });
-        }
-
-        // -------------------------------------------------
-        // VALIDATE
-        // -------------------------------------------------
-
-        const validationError =
-            await validateGameSession(req.body);
+        const validationError = await validateGameSession(req.body);
 
         if (validationError) {
             return res.status(400).json({
@@ -1001,301 +757,202 @@ const createGameSession = async (
         const gameId = Number(game_id);
         const stationId = Number(station_id);
 
-        const sessionStatus =
-            status !== undefined &&
-                status !== null &&
-                status !== ""
-                ? String(status)
-                    .trim()
-                    .toLowerCase()
-                : "active";
-
-        // We only allow new sessions to start active.
-        if (sessionStatus !== "active") {
-            return res.status(400).json({
+        if (!staffCanAccessGame(req, gameId)) {
+            return res.status(403).json({
                 success: false,
-                message:
-                    "New game sessions must start with active status"
+                message: "You can create sessions only for your assigned game"
             });
         }
 
-        const sessionRecordingStatus =
-            recording_status !== undefined &&
-                recording_status !== null &&
-                recording_status !== ""
-                ? String(recording_status)
-                    .trim()
-                    .toLowerCase()
-                : "not_recorded";
+        if (!isEmpty(status) && normalizeStatus(status) !== "active") {
+            return res.status(400).json({
+                success: false,
+                message: "New game sessions must start with active status"
+            });
+        }
 
-        const normalizedStartTime =
-            normalizeDateTimeForDb(
-                start_time
-            );
+        if (!isEmpty(end_time)) {
+            return res.status(400).json({
+                success: false,
+                message: "Active session cannot have end time"
+            });
+        }
 
-        const normalizedEndTime =
-            end_time === undefined ||
-                end_time === null ||
-                end_time === ""
-                ? null
-                : normalizeDateTimeForDb(
-                    end_time
-                );
+        const startTime = normalizeDateTimeForDb(start_time);
 
-        if (!normalizedStartTime) {
+        if (!startTime) {
             return res.status(400).json({
                 success: false,
                 message: "Invalid start time"
             });
         }
 
-        if (normalizedEndTime) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    "Active session cannot have end time"
-            });
-        }
-
-        // -------------------------------------------------
-        // TRANSACTION
-        // -------------------------------------------------
-
         connection = await db.getConnection();
-
         await connection.beginTransaction();
 
-        // -------------------------------------------------
-        // LOCK STATION
-        // -------------------------------------------------
+        // Lock the station row to serialize attempts to occupy it.
+        const [stations] = await connection.query(
+            `
+            SELECT id, station_name, status, current_player_id
+            FROM gaming_stations
+            WHERE id = ?
+            FOR UPDATE
+            `,
+            [stationId]
+        );
 
-        const [stations] =
-            await connection.query(
-                `
-                SELECT
-                    id,
-                    station_name,
-                    status,
-                    current_player_id
-                FROM gaming_stations
-                WHERE id = ?
-                FOR UPDATE
-                `,
-                [stationId]
-            );
-
-        if (stations.length === 0) {
-
+        if (!stations.length) {
             await connection.rollback();
 
             return res.status(404).json({
                 success: false,
-                message:
-                    "Gaming Station Not Found"
+                message: "Gaming Station Not Found"
             });
         }
 
         const station = stations[0];
 
         if (
-            station.status === "maintenance" ||
-            station.status === "inactive"
+            ["maintenance", "inactive"].includes(station.status)
         ) {
-
             await connection.rollback();
 
             return res.status(409).json({
                 success: false,
-                message:
-                    "Gaming station is currently unavailable"
+                message: "Gaming station is currently unavailable"
             });
         }
 
         if (station.status === "occupied") {
-
             await connection.rollback();
 
             return res.status(409).json({
                 success: false,
-                message:
-                    "Gaming station is already occupied"
+                message: "Gaming station is already occupied"
             });
         }
 
-        // -------------------------------------------------
-        // CHECK ACTIVE SESSION ON STATION
-        // -------------------------------------------------
+        const [activeSessions] = await connection.query(
+            `
+            SELECT id
+            FROM game_sessions
+            WHERE station_id = ?
+              AND status = 'active'
+            LIMIT 1
+            `,
+            [stationId]
+        );
 
-        const [activeSessions] =
-            await connection.query(
-                `
-                SELECT id
-                FROM game_sessions
-                WHERE station_id = ?
-                  AND status = 'active'
-                LIMIT 1
-                FOR UPDATE
-                `,
-                [stationId]
-            );
-
-        if (activeSessions.length > 0) {
-
+        if (activeSessions.length) {
             await connection.rollback();
 
             return res.status(409).json({
                 success: false,
-                message:
-                    "Gaming station already has an active game session"
+                message: "Gaming station already has an active game session"
             });
         }
 
-        // -------------------------------------------------
-        // FIND BOOKING
-        // -------------------------------------------------
+        const booking = await findMatchingBooking(connection, {
+            booking_id,
+            user_id: userId,
+            game_id: gameId,
+            station_id: stationId,
+            start_time: startTime
+        });
 
-        const booking =
-            await findMatchingBooking(
-                connection,
-                {
-                    booking_id,
-                    user_id: userId,
-                    game_id: gameId,
-                    station_id: stationId,
-                    start_time:
-                        normalizedStartTime
-                }
-            );
+        if (!isEmpty(booking_id) && !booking) {
+            await connection.rollback();
 
-        // If booking_id was explicitly provided,
-        // it must be valid.
-        if (
-            booking_id !== undefined &&
-            booking_id !== null &&
-            booking_id !== ""
-        ) {
-
-            if (!booking) {
-
-                await connection.rollback();
-
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "Selected booking does not match this player, game or gaming station"
-                });
-            }
+            return res.status(400).json({
+                success: false,
+                message: "Selected booking does not match this player, game, station, time slot or confirmed status"
+            });
         }
 
-        // -------------------------------------------------
-        // INSERT SESSION
-        // -------------------------------------------------
-
-        const [result] =
-            await connection.query(
-                `
-                INSERT INTO game_sessions (
-                    user_id,
-                    game_id,
-                    station_id,
-                    start_time,
-                    end_time,
-                    duration_minutes,
-                    amount,
-                    status,
-                    recording_status,
-                    video_file_id,
-                    notes
+        const sessionDuration = !isEmpty(duration_minutes)
+            ? Number(duration_minutes)
+            : booking
+                ? calculateTimeDuration(
+                    String(booking.start_time).slice(0, 8),
+                    String(booking.end_time).slice(0, 8)
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `,
-                [
-                    userId,
-                    gameId,
-                    stationId,
-                    normalizedStartTime,
-                    null,
-                    duration_minutes !== undefined &&
-                        duration_minutes !== null &&
-                        duration_minutes !== ""
-                        ? Number(duration_minutes)
-                        : booking
-                            ? calculateTimeDuration(
-                                booking.start_time,
-                                booking.end_time
-                            )
-                            : null,
-                    amount !== undefined &&
-                        amount !== null &&
-                        amount !== ""
-                        ? Number(amount)
-                        : booking
-                            ? Number(booking.amount || 0)
-                            : 0,
-                    "active",
-                    sessionRecordingStatus,
-                    video_file_id !== undefined &&
-                        video_file_id !== null &&
-                        video_file_id !== ""
-                        ? String(video_file_id).trim()
-                        : null,
-                    notes !== undefined &&
-                        notes !== null &&
-                        notes !== ""
-                        ? notes
-                        : null
-                ]
-            );
+                : null;
 
-        // -------------------------------------------------
-        // OCCUPY STATION
-        // -------------------------------------------------
+        const sessionAmount = !isEmpty(amount)
+            ? Number(amount)
+            : booking
+                ? Number(booking.amount || 0)
+                : 0;
+
+        const [result] = await connection.query(
+            `
+            INSERT INTO game_sessions (
+                user_id,
+                game_id,
+                station_id,
+                start_time,
+                end_time,
+                duration_minutes,
+                amount,
+                status,
+                recording_status,
+                video_file_id,
+                notes
+            )
+            VALUES (?, ?, ?, ?, NULL, ?, ?, 'active', ?, ?, ?)
+            `,
+            [
+                userId,
+                gameId,
+                stationId,
+                startTime,
+                sessionDuration,
+                sessionAmount,
+                isEmpty(recording_status)
+                    ? "not_recorded"
+                    : normalizeStatus(recording_status),
+                isEmpty(video_file_id)
+                    ? null
+                    : String(video_file_id).trim(),
+                isEmpty(notes) ? null : notes
+            ]
+        );
 
         await connection.query(
             `
             UPDATE gaming_stations
-            SET
-                status = 'occupied',
+            SET status = 'occupied',
                 current_player_id = ?
             WHERE id = ?
             `,
             [userId, stationId]
         );
 
-
         await connection.commit();
 
         return res.status(201).json({
             success: true,
-            message:
-                "Game Session Created Successfully",
+            message: "Game Session Created Successfully",
             gameSession_id: result.insertId,
-            booking_id:
-                booking ? booking.id : null
+            booking_id: booking ? booking.id : null
         });
-
     } catch (error) {
-
         if (connection) {
-            await connection.rollback();
+            try {
+                await connection.rollback();
+            } catch (rollbackError) {
+                console.error("Create session rollback error:", rollbackError.message);
+            }
         }
 
-        console.log(
-            "Create Game Session Error:",
-            error.message
-        );
+        console.error("Create Game Session Error:", error.message);
 
         return res.status(500).json({
             success: false,
-            message:
-                "Server error while creating game session"
+            message: "Server error while creating game session"
         });
-
     } finally {
-
-        if (connection) {
-            connection.release();
-        }
+        if (connection) connection.release();
     }
 };
 
@@ -1303,110 +960,92 @@ const createGameSession = async (
 // UPDATE GAME SESSION
 // =====================================================
 
-const updateGameSession = async (
-    req,
-    res
-) => {
-
+const updateGameSession = async (req, res) => {
     let connection;
 
     try {
-
         const { id } = req.params;
 
         if (!isPositiveInteger(id)) {
             return res.status(400).json({
                 success: false,
-                message:
-                    "Invalid Game Session ID"
+                message: "Invalid Game Session ID"
             });
         }
 
-        // -------------------------------------------------
-        // ONLY ADMIN / STAFF MAY MODIFY
-        // -------------------------------------------------
-
-        if (
-            req.user &&
-            req.user.role_name === "Player"
-        ) {
+        if (!isAdminOrStaff(req)) {
             return res.status(403).json({
                 success: false,
-                message:
-                    "Players cannot update game sessions"
+                message: "You are not authorized to update game sessions"
             });
         }
 
-        const sessionId = Number(id);
+        if (!validateStaffAssignment(req)) {
+            return res.status(403).json({
+                success: false,
+                message: "Staff member has no valid assigned game"
+            });
+        }
 
         connection = await db.getConnection();
-
         await connection.beginTransaction();
 
-        // -------------------------------------------------
-        // GET EXISTING SESSION
-        // DATE_FORMAT prevents MySQL Date object
-        // problems during validation.
-        // -------------------------------------------------
+        const [rows] = await connection.query(
+            `
+            SELECT
+                id, user_id, game_id, station_id,
+                start_time, end_time, duration_minutes,
+                amount, status, recording_status,
+                video_file_id, notes
+            FROM game_sessions
+            WHERE id = ?
+            FOR UPDATE
+            `,
+            [Number(id)]
+        );
 
-        const [existingSessions] =
-            await connection.query(
-                `
-                SELECT
-                    id,
-                    user_id,
-                    game_id,
-                    station_id,
-
-                    DATE_FORMAT(
-                        start_time,
-                        '%Y-%m-%d %H:%i:%s'
-                    ) AS start_time,
-
-                    DATE_FORMAT(
-                        end_time,
-                        '%Y-%m-%d %H:%i:%s'
-                    ) AS end_time,
-
-                    duration_minutes,
-                    amount,
-                    status,
-                    recording_status,
-                    video_file_id,
-                    notes
-
-                FROM game_sessions
-
-                WHERE id = ?
-
-                FOR UPDATE
-                `,
-                [sessionId]
-            );
-
-        if (existingSessions.length === 0) {
-
+        if (!rows.length) {
             await connection.rollback();
 
             return res.status(404).json({
                 success: false,
-                message:
-                    "Game Session Not Found"
+                message: "Game Session Not Found"
             });
         }
 
-        const existingSession =
-            existingSessions[0];
+        const existing = rows[0];
 
-        // -------------------------------------------------
-        // VALIDATE ONLY REQUEST DATA
-        // -------------------------------------------------
+        // Enforce ownership before processing submitted changes.
+        if (!staffCanAccessGame(req, existing.game_id)) {
+            await connection.rollback();
 
-        const validationError =
-            await validateGameSession(req.body);
+            return res.status(404).json({
+                success: false,
+                message: "Game Session Not Found"
+            });
+        }
+
+        // Staff cannot move a session to another game.
+        if (
+            req.user.role_name === "Staff" &&
+            hasField(req.body, "game_id") &&
+            (
+                !isPositiveInteger(req.body.game_id) ||
+                Number(req.body.game_id) !==
+                    Number(req.user.assigned_game_id)
+            )
+        ) {
+            await connection.rollback();
+
+            return res.status(403).json({
+                success: false,
+                message: "Staff can update sessions only for their assigned game"
+            });
+        }
+
+        const validationError = await validateGameSession(req.body);
 
         if (validationError) {
-
             await connection.rollback();
 
             return res.status(400).json({
@@ -1415,47 +1054,29 @@ const updateGameSession = async (
             });
         }
 
-        // -------------------------------------------------
-        // EFFECTIVE VALUES
-        // -------------------------------------------------
+        const effectiveStatus = hasField(req.body, "status")
+            ? normalizeStatus(req.body.status)
+            : existing.status;
 
-        const rawStartTime =
-            req.body.start_time !== undefined
+        const effectiveStart = normalizeDateTimeForDb(
+            hasField(req.body, "start_time")
                 ? req.body.start_time
-                : existingSession.start_time;
+                : existing.start_time
+        );
 
-        const rawEndTime =
-            req.body.end_time !== undefined
+        const effectiveEnd = isEmpty(
+            hasField(req.body, "end_time")
                 ? req.body.end_time
-                : existingSession.end_time;
-
-        const effectiveStartTime =
-            normalizeDateTimeForDb(
-                rawStartTime
+                : existing.end_time
+        )
+            ? null
+            : normalizeDateTimeForDb(
+                hasField(req.body, "end_time")
+                    ? req.body.end_time
+                    : existing.end_time
             );
 
-        const effectiveEndTime =
-            rawEndTime === null ||
-                rawEndTime === undefined ||
-                rawEndTime === ""
-                ? null
-                : normalizeDateTimeForDb(
-                    rawEndTime
-                );
-
-        const effectiveStatus =
-            req.body.status !== undefined
-                ? String(req.body.status)
-                    .trim()
-                    .toLowerCase()
-                : existingSession.status;
-
-        // -------------------------------------------------
-        // VALIDATE EFFECTIVE VALUES
-        // -------------------------------------------------
-
-        if (!effectiveStartTime) {
-
+        if (!effectiveStart) {
             await connection.rollback();
 
             return res.status(400).json({
@@ -1465,10 +1086,13 @@ const updateGameSession = async (
         }
 
         if (
-            effectiveEndTime !== null &&
-            !effectiveEndTime
+            !isEmpty(
+                hasField(req.body, "end_time")
+                    ? req.body.end_time
+                    : existing.end_time
+            ) &&
+            !effectiveEnd
         ) {
-
             await connection.rollback();
 
             return res.status(400).json({
@@ -1477,139 +1101,94 @@ const updateGameSession = async (
             });
         }
 
-        // -------------------------------------------------
-        // COMPLETED/CANCELLED SESSIONS
-        // CANNOT BE REACTIVATED
-        // -------------------------------------------------
-
+        // Completed and cancelled sessions are terminal.
         if (
-            existingSession.status !== "active" &&
+            existing.status !== "active" &&
             effectiveStatus === "active"
         ) {
-
             await connection.rollback();
 
             return res.status(400).json({
                 success: false,
-                message:
-                    "Completed or cancelled session cannot be reactivated"
+                message: "Completed or cancelled session cannot be reactivated"
             });
         }
 
-        // -------------------------------------------------
-        // ACTIVE SESSION
-        // PLAYER/GAME/STATION SHOULD NOT CHANGE
-        // -------------------------------------------------
+        // Session identity cannot change while the session is active.
+        if (existing.status === "active") {
+            for (const field of ["user_id", "game_id", "station_id"]) {
+                if (
+                    hasField(req.body, field) &&
+                    Number(req.body[field]) !== Number(existing[field])
+                ) {
+                    await connection.rollback();
 
-        if (existingSession.status === "active") {
-
-            if (
-                req.body.user_id !== undefined &&
-                Number(req.body.user_id) !==
-                Number(existingSession.user_id)
-            ) {
-
-                await connection.rollback();
-
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "Player cannot be changed while session is active"
-                });
+                    return res.status(400).json({
+                        success: false,
+                        message: `${field} cannot be changed while session is active`
+                    });
+                }
             }
 
             if (
-                req.body.game_id !== undefined &&
-                Number(req.body.game_id) !==
-                Number(existingSession.game_id)
+                hasField(req.body, "start_time") &&
+                effectiveStart !== normalizeDateTimeForDb(existing.start_time)
             ) {
-
                 await connection.rollback();
 
                 return res.status(400).json({
                     success: false,
-                    message:
-                        "Game cannot be changed while session is active"
-                });
-            }
-
-            if (
-                req.body.station_id !== undefined &&
-                Number(req.body.station_id) !==
-                Number(existingSession.station_id)
-            ) {
-
-                await connection.rollback();
-
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "Gaming station cannot be changed while session is active"
+                    message: "Start time cannot be changed while session is active"
                 });
             }
         }
 
-        // -------------------------------------------------
-        // END TIME / DURATION
-        // -------------------------------------------------
+        const calculatedDuration = effectiveEnd
+            ? calculateDuration(effectiveStart, effectiveEnd)
+            : null;
 
-        let calculatedDuration = null;
-
-        if (effectiveEndTime) {
-
-            calculatedDuration =
-                calculateDuration(
-                    effectiveStartTime,
-                    effectiveEndTime
-                );
-
-            if (calculatedDuration === null) {
-
-                await connection.rollback();
-
-                return res.status(400).json({
-                    success: false,
-                    message:
-                        "End time must be greater than or equal to start time"
-                });
-            }
-        }
-
-        // -------------------------------------------------
-        // STATUS RULES
-        // -------------------------------------------------
-
-        if (
-            effectiveStatus === "completed" &&
-            !effectiveEndTime
-        ) {
-
+        if (effectiveEnd && calculatedDuration === null) {
             await connection.rollback();
 
             return res.status(400).json({
                 success: false,
-                message:
-                    "Completed session must have end time"
+                message: "End time must be greater than or equal to start time"
             });
         }
 
+        if (effectiveStatus === "completed" && !effectiveEnd) {
+            await connection.rollback();
+
+            return res.status(400).json({
+                success: false,
+                message: "Completed session must have end time"
+            });
+        }
+
+        if (effectiveStatus === "active" && effectiveEnd) {
+            await connection.rollback();
+
+            return res.status(400).json({
+                success: false,
+                message: "Active session cannot have end time"
+            });
+        }
+
+        // Do not allow clients to change recording status to completed
+        // while the session is active. Upload completion is a separate
+        // recording workflow and must not be assumed here.
         if (
+            existing.status === "active" &&
             effectiveStatus === "active" &&
-            effectiveEndTime
+            normalizeStatus(req.body.recording_status) === "completed"
         ) {
-
             await connection.rollback();
 
             return res.status(400).json({
                 success: false,
-                message:
-                    "Active session cannot have end time"
+                message: "Recording cannot be marked completed while the session is active"
             });
         }
-
-        // -------------------------------------------------
-        // BUILD UPDATE
-        // -------------------------------------------------
 
         const allowedFields = [
             "user_id",
@@ -1628,170 +1207,81 @@ const updateGameSession = async (
         const updateFields = [];
         const updateValues = [];
 
-        for (
-            const field of allowedFields
-        ) {
-
-            if (
-                !Object.prototype.hasOwnProperty.call(
-                    req.body,
-                    field
-                )
-            ) {
-                continue;
-            }
+        for (const field of allowedFields) {
+            if (!hasField(req.body, field)) continue;
 
             let value = req.body[field];
 
-            // IDs
             if (
-                field === "user_id" ||
-                field === "game_id" ||
-                field === "station_id"
+                ["user_id", "game_id", "station_id"].includes(field)
             ) {
                 value = Number(value);
-            }
-
-            // START TIME
-            if (field === "start_time") {
-                value = effectiveStartTime;
-            }
-
-            // END TIME
-            if (field === "end_time") {
-                value = effectiveEndTime;
-            }
-
-            // STATUS
-            if (
-                field === "status" ||
-                field === "recording_status"
+            } else if (field === "start_time") {
+                value = effectiveStart;
+            } else if (field === "end_time") {
+                value = effectiveEnd;
+            } else if (
+                ["status", "recording_status"].includes(field)
             ) {
-                value = String(value)
-                    .trim()
-                    .toLowerCase();
+                value = normalizeStatus(value);
+            } else if (field === "duration_minutes") {
+                value = isEmpty(value) ? null : Number(value);
+            } else if (field === "amount") {
+                value = isEmpty(value) ? null : Number(value);
+            } else if (field === "video_file_id") {
+                value = isEmpty(value) ? null : String(value).trim();
+            } else if (field === "notes") {
+                value = isEmpty(value) ? null : value;
             }
 
-            // DURATION
-            if (
-                field === "duration_minutes"
-            ) {
-                value =
-                    value === null ||
-                        value === ""
-                        ? null
-                        : Number(value);
-            }
-
-            // AMOUNT
-            if (field === "amount") {
-                value =
-                    value === null ||
-                        value === ""
-                        ? null
-                        : Number(value);
-            }
-
-            // VIDEO
-            if (
-                field === "video_file_id"
-            ) {
-                value =
-                    value === null ||
-                        value === ""
-                        ? null
-                        : String(value).trim();
-            }
-
-            // NOTES
-            if (field === "notes") {
-                value =
-                    value === ""
-                        ? null
-                        : value;
-            }
-
-            updateFields.push(
-                `${field} = ?`
-            );
-
+            updateFields.push(`${field} = ?`);
             updateValues.push(value);
         }
 
-        // -------------------------------------------------
-        // AUTO DURATION
-        // -------------------------------------------------
-
-        const durationWasProvided =
-            req.body.duration_minutes !== undefined &&
-            req.body.duration_minutes !== null &&
-            req.body.duration_minutes !== "";
-
+        // Recalculate duration when end time is supplied and duration
+        // was not explicitly supplied by the client.
         if (
-            calculatedDuration !== null &&
-            !durationWasProvided
+            effectiveEnd &&
+            !hasField(req.body, "duration_minutes")
         ) {
+            const existingDuration = Number(existing.duration_minutes);
 
-            updateFields.push(
-                "duration_minutes = ?"
-            );
-
-            updateValues.push(
-                calculatedDuration
-            );
+            if (
+                existing.end_time !== effectiveEnd ||
+                !Number.isFinite(existingDuration)
+            ) {
+                updateFields.push("duration_minutes = ?");
+                updateValues.push(calculatedDuration);
+            }
         }
 
-        // -------------------------------------------------
-        // END SESSION BUSINESS LOGIC
-        // -------------------------------------------------
-
-        let relatedBooking = null;
-
-        if (
-            existingSession.status === "active" &&
-            (
-                effectiveStatus === "completed" ||
-                effectiveStatus === "cancelled"
-            )
-        ) {
-
-            // Find booking related to this session.
-            relatedBooking =
-                await findMatchingBooking(
-                    connection,
-                    {
-                        user_id:
-                            existingSession.user_id,
-                        game_id:
-                            existingSession.game_id,
-                        station_id:
-                            existingSession.station_id,
-                        start_time:
-                            effectiveStartTime
-                    }
-                );
-        }
-
-        // -------------------------------------------------
-        // NO UPDATE FIELDS
-        // -------------------------------------------------
-
-        if (updateFields.length === 0) {
-
+        if (!updateFields.length) {
             await connection.rollback();
 
             return res.status(400).json({
                 success: false,
-                message:
-                    "No valid fields provided for update"
+                message: "No valid fields provided for update"
             });
         }
 
-        // -------------------------------------------------
-        // UPDATE GAME SESSION
-        // -------------------------------------------------
+        // A station row is locked when releasing it to avoid racing
+        // with another session attempting to occupy that station.
+        if (
+            existing.status === "active" &&
+            ["completed", "cancelled"].includes(effectiveStatus)
+        ) {
+            await connection.query(
+                `
+                SELECT id
+                FROM gaming_stations
+                WHERE id = ?
+                FOR UPDATE
+                `,
+                [existing.station_id]
+            );
+        }
 
-        updateValues.push(sessionId);
+        updateValues.push(Number(id));
 
         await connection.query(
             `
@@ -1802,111 +1292,53 @@ const updateGameSession = async (
             updateValues
         );
 
-        // -------------------------------------------------
-        // SESSION COMPLETED
-        // -------------------------------------------------
+        let relatedBooking = null;
 
         if (
-            existingSession.status === "active" &&
-            effectiveStatus === "completed"
+            existing.status === "active" &&
+            ["completed", "cancelled"].includes(effectiveStatus)
         ) {
+            // The schema has no game_sessions.booking_id. Match the
+            // original session against its confirmed booking.
+            relatedBooking = await findMatchingBooking(connection, {
+                user_id: existing.user_id,
+                game_id: existing.game_id,
+                station_id: existing.station_id,
+                start_time: existing.start_time
+            });
 
-            // Complete booking
             if (relatedBooking) {
+                const bookingStatus =
+                    effectiveStatus === "completed"
+                        ? "completed"
+                        : "cancelled";
 
                 await connection.query(
                     `
                     UPDATE bookings
-                    SET status = 'completed'
+                    SET status = ?
                     WHERE id = ?
-                      AND status IN (
-                          'pending',
-                          'confirmed'
-                      )
+                      AND status = 'confirmed'
                     `,
-                    [relatedBooking.id]
+                    [bookingStatus, relatedBooking.id]
                 );
             }
 
-            // Release station.
-            // If station was changed to maintenance,
-            // preserve maintenance status.
+            // Release the station only if it still belongs to this
+            // session's player. Preserve maintenance/inactive status.
             await connection.query(
                 `
                 UPDATE gaming_stations
-                SET
-                    status =
-                        CASE
-                            WHEN status = 'maintenance'
-                                THEN 'maintenance'
-                            WHEN status = 'inactive'
-                                THEN 'inactive'
-                            ELSE 'available'
-                        END,
-                    current_player_id = NULL
+                SET status = CASE
+                    WHEN status IN ('maintenance', 'inactive')
+                        THEN status
+                    ELSE 'available'
+                END,
+                current_player_id = NULL
                 WHERE id = ?
-                  AND (
-                      current_player_id = ?
-                      OR current_player_id IS NULL
-                  )
+                  AND current_player_id = ?
                 `,
-                [
-                    existingSession.station_id,
-                    existingSession.user_id
-                ]
-            );
-        }
-
-        // -------------------------------------------------
-        // SESSION CANCELLED
-        // -------------------------------------------------
-
-        if (
-            existingSession.status === "active" &&
-            effectiveStatus === "cancelled"
-        ) {
-
-            // Cancel booking
-            if (relatedBooking) {
-
-                await connection.query(
-                    `
-                    UPDATE bookings
-                    SET status = 'cancelled'
-                    WHERE id = ?
-                      AND status IN (
-                          'pending',
-                          'confirmed'
-                      )
-                    `,
-                    [relatedBooking.id]
-                );
-            }
-
-            // Release station
-            await connection.query(
-                `
-                UPDATE gaming_stations
-                SET
-                    status =
-                        CASE
-                            WHEN status = 'maintenance'
-                                THEN 'maintenance'
-                            WHEN status = 'inactive'
-                                THEN 'inactive'
-                            ELSE 'available'
-                        END,
-                    current_player_id = NULL
-                WHERE id = ?
-                  AND (
-                      current_player_id = ?
-                      OR current_player_id IS NULL
-                  )
-                `,
-                [
-                    existingSession.station_id,
-                    existingSession.user_id
-                ]
+                [existing.station_id, existing.user_id]
             );
         }
 
@@ -1917,164 +1349,120 @@ const updateGameSession = async (
             message:
                 effectiveStatus === "completed"
                     ? "Game Session Ended Successfully"
-                    : "Game Session Updated Successfully",
-            booking_updated:
-                relatedBooking !== null
+                    : effectiveStatus === "cancelled"
+                        ? "Game Session Cancelled Successfully"
+                        : "Game Session Updated Successfully",
+            booking_updated: relatedBooking !== null
         });
-
     } catch (error) {
-
         if (connection) {
-            await connection.rollback();
+            try {
+                await connection.rollback();
+            } catch (rollbackError) {
+                console.error("Update session rollback error:", rollbackError.message);
+            }
         }
 
-        console.log(
-            "Update Game Session Error:",
-            error.message
-        );
+        console.error("Update Game Session Error:", error.message);
 
         return res.status(500).json({
             success: false,
-            message:
-                "Server error while updating game session"
+            message: "Server error while updating game session"
         });
-
     } finally {
-
-        if (connection) {
-            connection.release();
-        }
+        if (connection) connection.release();
     }
 };
 
 // =====================================================
 // DELETE GAME SESSION
+// ADMIN ONLY
 // =====================================================
 
-const deleteGameSession = async (
-    req,
-    res
-) => {
-
+const deleteGameSession = async (req, res) => {
     let connection;
 
     try {
-
         const { id } = req.params;
 
         if (!isPositiveInteger(id)) {
             return res.status(400).json({
                 success: false,
-                message:
-                    "Invalid Game Session ID"
+                message: "Invalid Game Session ID"
             });
         }
 
-        if (
-            req.user &&
-            req.user.role_name === "Player"
-        ) {
+        if (req.user?.role_name !== "Admin") {
             return res.status(403).json({
                 success: false,
-                message:
-                    "Players cannot delete game sessions"
+                message: "Only Admin can delete game sessions"
             });
         }
 
-        const sessionId = Number(id);
-
         connection = await db.getConnection();
-
         await connection.beginTransaction();
 
-        // -------------------------------------------------
-        // CHECK SESSION
-        // -------------------------------------------------
+        const [rows] = await connection.query(
+            `
+            SELECT id, status, station_id, user_id
+            FROM game_sessions
+            WHERE id = ?
+            FOR UPDATE
+            `,
+            [Number(id)]
+        );
 
-        const [sessions] =
-            await connection.query(
-                `
-                SELECT
-                    id,
-                    status,
-                    station_id,
-                    user_id
-                FROM game_sessions
-                WHERE id = ?
-                FOR UPDATE
-                `,
-                [sessionId]
-            );
-
-        if (sessions.length === 0) {
-
+        if (!rows.length) {
             await connection.rollback();
 
             return res.status(404).json({
                 success: false,
-                message:
-                    "Game Session Not Found"
+                message: "Game Session Not Found"
             });
         }
 
-        const session = sessions[0];
-
-        // Don't delete active session.
-        // It could leave the station occupied.
-        if (session.status === "active") {
-
+        if (rows[0].status === "active") {
             await connection.rollback();
 
             return res.status(409).json({
                 success: false,
-                message:
-                    "Active game session cannot be deleted. End or cancel the session first."
+                message: "Active game session cannot be deleted. End or cancel the session first."
             });
         }
 
         await connection.query(
-            `
-            DELETE FROM game_sessions
-            WHERE id = ?
-            `,
-            [sessionId]
+            "DELETE FROM game_sessions WHERE id = ?",
+            [Number(id)]
         );
 
         await connection.commit();
 
         return res.status(200).json({
             success: true,
-            message:
-                "Game Session Deleted Successfully"
+            message: "Game Session Deleted Successfully"
         });
-
     } catch (error) {
-
         if (connection) {
-            await connection.rollback();
+            try {
+                await connection.rollback();
+            } catch (rollbackError) {
+                console.error("Delete session rollback error:", rollbackError.message);
+            }
         }
 
-        console.log(
-            "Delete Game Session Error:",
-            error.message
-        );
+        console.error("Delete Game Session Error:", error.message);
 
         return res.status(500).json({
             success: false,
-            message:
-                "Server error while deleting game session"
+            message: "Server error while deleting game session"
         });
-
     } finally {
-
-        if (connection) {
-            connection.release();
-        }
+        if (connection) connection.release();
     }
 };
 
 // =====================================================
-// EXPORT
+// EXPORTS
 // =====================================================
 
 module.exports = {
