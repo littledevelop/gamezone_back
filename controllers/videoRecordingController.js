@@ -619,6 +619,12 @@ const uploadVideoToCloudinary = async (req, res) => {
             }
         );
 
+
+        console.log("Cloudinary secure_url:", uploadResult.secure_url);
+console.log("Cloudinary public_id:", uploadResult.public_id);
+console.log("Uploaded file path:", req.file.path);
+
+
         // ==========================================
         // Save recording in MySQL
         // ==========================================
@@ -694,7 +700,15 @@ const uploadVideoToCloudinary = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Video upload error:", error);
+         console.error("========== VIDEO UPLOAD ERROR ==========");
+        console.error("Message:", error.message);
+        console.error("Name:", error.name);
+        console.error("Code:", error.code);
+        console.error("HTTP Code:", error.http_code);
+        console.error("Stack:", error.stack);
+        console.error("Request Body:", req.body);
+        console.error("Uploaded File:", req.file);
+        console.error("========================================");
 
         // Delete temporary file if upload fails
         if (req.file?.path && fs.existsSync(req.file.path)) {

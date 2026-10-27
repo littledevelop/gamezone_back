@@ -2,6 +2,22 @@
 const db = require("../config/db");
 
 // ==================================================
+// STAFF GAME PERMISSION
+// ==================================================
+
+const isStaffAssignedGame = (req, gameId) => {
+    if (req.user.role_name !== "Staff") {
+        return true;
+    }
+
+    return (
+        req.user.assigned_game_id !== null &&
+        req.user.assigned_game_id !== undefined &&
+        Number(gameId) === Number(req.user.assigned_game_id)
+    );
+};
+
+// ==================================================
 // GET ALL BOOKINGS
 // ==================================================
 
@@ -22,9 +38,11 @@ const getAllBookings = async (req, res) => {
                 b.station_id,
                 gs.station_name,
 
-                b.booking_date,
-                b.start_time,
-                b.end_time,
+                DATE_FORMAT(b.booking_date, '%Y-%m-%d') AS booking_date,
+
+                DATE_FORMAT(b.start_time, '%H:%i:%s') AS start_time,
+                
+                DATE_FORMAT(b.end_time, '%H:%i:%s') AS end_time,
 
                 b.status,
                 b.payment_status,
@@ -46,14 +64,29 @@ const getAllBookings = async (req, res) => {
                 ON b.station_id = gs.id
         `;
 
+
         let queryParams = [];
 
         if (req.user.role_name === "Player") {
             query += ` WHERE b.user_id = ?`;
             queryParams = [req.user.id];
+        } else if (req.user.role_name === "Staff") {
+            if (
+                req.user.assigned_game_id === null ||
+                req.user.assigned_game_id === undefined
+            ) {
+                return res.status(403).json({
+                    success: false,
+                    message: "No game is assigned to this staff member"
+                });
+            }
+
+            query += ` WHERE b.game_id = ?`;
+            queryParams = [req.user.assigned_game_id];
         }
 
         query += ` ORDER BY b.id DESC`;
+
 
         const [bookings] = await db.query(query, queryParams);
 
@@ -73,11 +106,7 @@ const getAllBookings = async (req, res) => {
     }
 };
 
-
-// ==================================================
 // GET BOOKING BY ID
-// ==================================================
-
 const getBookingById = async (req, res) => {
     try {
         const { id } = req.params;
@@ -232,15 +261,58 @@ const validateBookingData = async (bookingData) => {
     }
 
     // Membership expiry
-    const today = new Date();
-    const expiryDate = new Date(
-        membership[0].expiry_date
+    // const today = new Date();
+    // const expiryDate = new Date(
+    //     membership[0].expiry_date
+    // );
+
+    // today.setHours(0, 0, 0, 0);
+    // expiryDate.setHours(0, 0, 0, 0);
+
+    // if (expiryDate < today) {
+    //     return "Membership has expired";
+    // }
+
+    // --------------------------------------------------
+    // MEMBERSHIP EXPIRY
+    // Compare date-only strings to avoid UTC/timezone bugs.
+    // Membership remains valid through its expiry date.
+    // --------------------------------------------------
+
+    const expiryValue = membership[0].expiry_date;
+
+    const expiryDate = expiryValue instanceof Date
+        ? [
+            expiryValue.getFullYear(),
+            String(expiryValue.getMonth() + 1).padStart(2, "0"),
+            String(expiryValue.getDate()).padStart(2, "0")
+        ].join("-")
+        : String(expiryValue || "").slice(0, 10);
+
+    const indiaDateParts = new Intl.DateTimeFormat(
+        "en-GB",
+        {
+            timeZone: "Asia/Kolkata",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit"
+        }
+    ).formatToParts(new Date());
+
+    const dateParts = Object.fromEntries(
+        indiaDateParts.map((part) => [
+            part.type,
+            part.value
+        ])
     );
 
-    today.setHours(0, 0, 0, 0);
-    expiryDate.setHours(0, 0, 0, 0);
+    const todayDateString =
+        `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
 
-    if (expiryDate < today) {
+    if (
+        !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate) ||
+        expiryDate < todayDateString
+    ) {
         return "Membership has expired";
     }
 
@@ -389,6 +461,14 @@ const createBooking = async (req, res) => {
             user_id = req.user.id;
         }
 
+        // STAFF CAN ONLY BOOK THEIR ASSIGNED GAME
+
+        if (!isStaffAssignedGame(req, game_id)) {
+            return res.status(403).json({
+                success: false,
+                message: "You can only create bookings for your assigned game"
+            });
+        }
         // --------------------------------------------------
         // COMMON VALIDATION
         // --------------------------------------------------
@@ -605,6 +685,7 @@ const updateBooking = async (req, res) => {
             `
             SELECT
                 id,
+                game_id,
                 status,
                 payment_status
             FROM bookings
@@ -617,6 +698,24 @@ const updateBooking = async (req, res) => {
             return res.status(404).json({
                 success: false,
                 message: "Booking Not Found"
+            });
+        }
+
+        const currentBooking = existingBooking[0];
+
+        // Staff cannot edit bookings belonging to another game.
+        if (!isStaffAssignedGame(req, currentBooking.game_id)) {
+            return res.status(403).json({
+                success: false,
+                message: "You cannot edit bookings for another game"
+            });
+        }
+
+        // Staff cannot change a booking to another game.
+        if (!isStaffAssignedGame(req, game_id)) {
+            return res.status(403).json({
+                success: false,
+                message: "You can only assign bookings to your assigned game"
             });
         }
 
@@ -819,6 +918,7 @@ const updateBookingStatus = async (req, res) => {
             SELECT
                 id,
                 user_id,
+                game_id,
                 status,
                 payment_status
             FROM bookings
@@ -837,6 +937,14 @@ const updateBookingStatus = async (req, res) => {
         const booking =
             existingBooking[0];
 
+        // STAFF CAN ONLY CHANGE STATUS FOR THEIR ASSIGNED GAME
+
+        if (!isStaffAssignedGame(req, booking.game_id)) {
+            return res.status(403).json({
+                success: false,
+                message: "You cannot update bookings for another game"
+            });
+        }
         // --------------------------------------------------
         // PLAYER PERMISSION
         // --------------------------------------------------
@@ -982,6 +1090,13 @@ const deleteBooking = async (req, res) => {
             return res.status(404).json({
                 success: false,
                 message: "Booking Not Found"
+            });
+        }
+
+        if (req.user.role_name !== "Admin") {
+            return res.status(403).json({
+                success: false,
+                message: "Only Admin can delete bookings"
             });
         }
 

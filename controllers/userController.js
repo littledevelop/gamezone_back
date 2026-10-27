@@ -70,6 +70,7 @@ const createUserRecord = async ({
   date_of_birth,
   address,
   role_id,
+  assigned_game_id,
 }) => {
   // Check email
   const [existingEmail] = await db.query(
@@ -100,8 +101,8 @@ const createUserRecord = async ({
   // Create user
   const [result] = await db.query(
     `INSERT INTO users
-        (full_name, mobile, email, password, date_of_birth, address, role_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        (full_name, mobile, email, password, date_of_birth, address, role_id, assigned_game_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?,?)`,
     [
       full_name,
       mobile || null,
@@ -110,6 +111,9 @@ const createUserRecord = async ({
       date_of_birth || null,
       address || null,
       role_id,
+      Number(role_id) === 2
+        ? (assigned_game_id || null)
+        : null,
     ],
   );
 
@@ -119,6 +123,7 @@ const createUserRecord = async ({
     mobile: mobile || null,
     email,
     role_id,
+    assigned_game_id: Number(role_id) === 2 ? (assigned_game_id || null) : null,
   };
 };
 
@@ -134,6 +139,7 @@ const createUser = async (req, res) => {
       date_of_birth,
       address,
       role_id,
+      assigned_game_id,
     } = req.body || {};
 
     // Validate required fields
@@ -152,6 +158,20 @@ const createUser = async (req, res) => {
       });
     }
 
+    if (
+      Number(role_id) === 2 &&
+      (
+        assigned_game_id === undefined ||
+        assigned_game_id === null ||
+        assigned_game_id === ""
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please assign a game to this staff member",
+      });
+    }
+
     const user = await createUserRecord({
       full_name,
       mobile,
@@ -160,6 +180,7 @@ const createUser = async (req, res) => {
       date_of_birth,
       address,
       role_id: Number(role_id),
+      assigned_game_id,
     });
 
     return res.status(201).json({
@@ -195,6 +216,7 @@ const updateUser = async (req, res) => {
       email,
       role_id,
       password,
+      assigned_game_id,
     } = req.body || {};
 
     if (!userId) {
@@ -260,6 +282,19 @@ const updateUser = async (req, res) => {
       }
     }
 
+    if (
+      Number(role_id) === 2 &&
+      (
+        assigned_game_id === undefined ||
+        assigned_game_id === null ||
+        assigned_game_id === ""
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please assign a game to this staff member",
+      });
+    }
     // Update with password
     if (password) {
       const hashedPassword = await bcrypt.hash(password, 10);
@@ -270,7 +305,8 @@ const updateUser = async (req, res) => {
              mobile = ?,
              email = ?,
              password = ?,
-             role_id = ?
+             role_id = ?,
+             assigned_game_id = ?
          WHERE id = ?`,
         [
           full_name,
@@ -278,6 +314,7 @@ const updateUser = async (req, res) => {
           email,
           hashedPassword,
           Number(role_id),
+          Number(role_id) === 2 ? Number(assigned_game_id):null,
           userId,
         ]
       );
@@ -337,7 +374,7 @@ const deleteUser = async (req, res) => {
       message: "User deleted successfully",
     });
 
-    
+
   }
   catch (error) {
     console.error("Delete user error:", error);
@@ -345,7 +382,7 @@ const deleteUser = async (req, res) => {
       success: false,
       message: "Failed to delete user",
     });
-  } 
+  }
 };
 
 module.exports = {

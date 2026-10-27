@@ -253,19 +253,19 @@ const findMatchingBooking = async (
     const bookingTime = normalizedStart.substring(11, 19);
 
     const selectSql = `
-        SELECT
-            id,
-            user_id,
-            membership_id,
-            game_id,
-            station_id,
-            booking_date,
-            start_time,
-            end_time,
-            status,
-            payment_status,
-            amount
-        FROM bookings
+     SELECT
+    id,
+    user_id,
+    membership_id,
+    game_id,
+    station_id,
+    DATE_FORMAT(booking_date, '%Y-%m-%d') AS booking_date,
+    TIME_FORMAT(start_time, '%H:%i:%s') AS start_time,
+    TIME_FORMAT(end_time, '%H:%i:%s') AS end_time,
+    status,
+    payment_status,
+    amount
+FROM bookings
     `;
 
     // Exact booking requested by the frontend.
@@ -285,7 +285,8 @@ const findMatchingBooking = async (
             Number(booking.user_id) !== Number(user_id) ||
             Number(booking.game_id) !== Number(game_id) ||
             Number(booking.station_id) !== Number(station_id) ||
-            booking.status !== "confirmed" ||
+            normalizeStatus(booking.status) !== "confirmed" ||
+            normalizeStatus(booking.payment_status) !== "paid" ||
             String(booking.booking_date).slice(0, 10) !== bookingDate
         ) {
             return null;
@@ -307,12 +308,13 @@ const findMatchingBooking = async (
         `
         ${selectSql}
         WHERE user_id = ?
-          AND game_id = ?
-          AND station_id = ?
-          AND booking_date = ?
-          AND status = 'confirmed'
-          AND start_time <= ?
-          AND end_time > ?
+  AND game_id = ?
+  AND station_id = ?
+  AND booking_date = ?
+  AND status = 'confirmed'
+  AND payment_status = 'paid'
+  AND start_time <= ?
+  AND end_time > ?
         ORDER BY id DESC
         LIMIT 1
         `,
@@ -427,11 +429,11 @@ const validateGameSession = async (data) => {
 
     if (
         !isEmpty(status) &&
-        !["active", "completed", "cancelled"].includes(
+        !["preparing", "active", "completed", "cancelled"].includes(
             normalizeStatus(status)
         )
     ) {
-        return "Status must be active, completed or cancelled";
+        return "Status must be preparing, active, completed or cancelled";
     }
 
     if (
@@ -480,6 +482,11 @@ const validateGameSession = async (data) => {
 const getAllGameSessions = async (req, res) => {
     try {
         const role = req.user?.role_name;
+        // console.log("GAME SESSION ACCESS CHECK:", {
+        //     userId: req.user?.id,
+        //     role: req.user?.role_name,
+        //     assigned_game_id: req.user?.assigned_game_id
+        // });
         const params = [];
 
         let where = "";
@@ -764,10 +771,15 @@ const createGameSession = async (req, res) => {
             });
         }
 
-        if (!isEmpty(status) && normalizeStatus(status) !== "active") {
+        if (
+            !isEmpty(status) &&
+            !["preparing", "active"].includes(
+                normalizeStatus(status)
+            )
+        ) {
             return res.status(400).json({
                 success: false,
-                message: "New game sessions must start with active status"
+                message: "New game sessions must start with preparing or active status"
             });
         }
 
@@ -869,19 +881,20 @@ const createGameSession = async (req, res) => {
             });
         }
 
-        const sessionDuration = !isEmpty(duration_minutes)
-            ? Number(duration_minutes)
-            : booking
-                ? calculateTimeDuration(
-                    String(booking.start_time).slice(0, 8),
-                    String(booking.end_time).slice(0, 8)
-                )
+
+        const sessionDuration = booking
+            ? calculateTimeDuration(
+                String(booking.start_time).slice(0, 8),
+                String(booking.end_time).slice(0, 8)
+            )
+            : !isEmpty(duration_minutes)
+                ? Number(duration_minutes)
                 : null;
 
-        const sessionAmount = !isEmpty(amount)
-            ? Number(amount)
-            : booking
-                ? Number(booking.amount || 0)
+        const sessionAmount = booking
+            ? Number(booking.amount || 0)
+            : !isEmpty(amount)
+                ? Number(amount)
                 : 0;
 
         const [result] = await connection.query(
@@ -899,7 +912,7 @@ const createGameSession = async (req, res) => {
                 video_file_id,
                 notes
             )
-            VALUES (?, ?, ?, ?, NULL, ?, ?, 'active', ?, ?, ?)
+            VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
             `,
             [
                 userId,
@@ -908,6 +921,9 @@ const createGameSession = async (req, res) => {
                 startTime,
                 sessionDuration,
                 sessionAmount,
+                isEmpty(status)
+                    ? "preparing"
+                    : normalizeStatus(status),
                 isEmpty(recording_status)
                     ? "not_recorded"
                     : normalizeStatus(recording_status),
@@ -1032,7 +1048,7 @@ const updateGameSession = async (req, res) => {
             (
                 !isPositiveInteger(req.body.game_id) ||
                 Number(req.body.game_id) !==
-                    Number(req.user.assigned_game_id)
+                Number(req.user.assigned_game_id)
             )
         ) {
             await connection.rollback();
@@ -1102,20 +1118,23 @@ const updateGameSession = async (req, res) => {
         }
 
         // Completed and cancelled sessions are terminal.
+        // A preparing session may move to active when the game starts.
         if (
-            existing.status !== "active" &&
-            effectiveStatus === "active"
+            ["completed", "cancelled"].includes(existing.status) &&
+            effectiveStatus !== existing.status
         ) {
             await connection.rollback();
 
             return res.status(400).json({
                 success: false,
-                message: "Completed or cancelled session cannot be reactivated"
+                message: "Completed or cancelled session cannot be changed"
             });
         }
 
-        // Session identity cannot change while the session is active.
-        if (existing.status === "active") {
+        // Session identity cannot change while preparing or active.
+        if (
+            ["preparing", "active"].includes(existing.status)
+        ) {
             for (const field of ["user_id", "game_id", "station_id"]) {
                 if (
                     hasField(req.body, field) &&
@@ -1125,7 +1144,7 @@ const updateGameSession = async (req, res) => {
 
                     return res.status(400).json({
                         success: false,
-                        message: `${field} cannot be changed while session is active`
+                        message: `${field} cannot be changed while the session is preparing or active`
                     });
                 }
             }
@@ -1138,7 +1157,7 @@ const updateGameSession = async (req, res) => {
 
                 return res.status(400).json({
                     success: false,
-                    message: "Start time cannot be changed while session is active"
+                    message: "Start time cannot be changed while the session is preparing or active"
                 });
             }
         }
@@ -1267,7 +1286,7 @@ const updateGameSession = async (req, res) => {
         // A station row is locked when releasing it to avoid racing
         // with another session attempting to occupy that station.
         if (
-            existing.status === "active" &&
+            ["preparing", "active"].includes(existing.status) &&
             ["completed", "cancelled"].includes(effectiveStatus)
         ) {
             await connection.query(
@@ -1293,7 +1312,7 @@ const updateGameSession = async (req, res) => {
         );
 
         let relatedBooking = null;
-
+        let bookingUpdated = false;
         if (
             existing.status === "active" &&
             ["completed", "cancelled"].includes(effectiveStatus)
@@ -1307,21 +1326,35 @@ const updateGameSession = async (req, res) => {
                 start_time: existing.start_time
             });
 
-            if (relatedBooking) {
-                const bookingStatus =
-                    effectiveStatus === "completed"
-                        ? "completed"
-                        : "cancelled";
+            //     if (relatedBooking) {
+            //         // const bookingStatus =
+            //         //     effectiveStatus === "completed"
+            //         //         ? "completed"
+            //         //         : "cancelled";
 
-                await connection.query(
+            //         await connection.query(
+            //             `
+            //            UPDATE bookings
+            // SET status = 'completed'
+            // WHERE id = ?
+            //   AND status = 'confirmed'
+            // `,
+            // [relatedBooking.id]
+            //         );
+            //     }
+
+            if (relatedBooking && effectiveStatus === "completed") {
+                const [bookingResult] = await connection.query(
                     `
-                    UPDATE bookings
-                    SET status = ?
-                    WHERE id = ?
-                      AND status = 'confirmed'
-                    `,
-                    [bookingStatus, relatedBooking.id]
+        UPDATE bookings
+        SET status = 'completed'
+        WHERE id = ?
+          AND status = 'confirmed'
+        `,
+                    [relatedBooking.id]
                 );
+
+                bookingUpdated = bookingResult.affectedRows > 0;
             }
 
             // Release the station only if it still belongs to this
@@ -1352,7 +1385,7 @@ const updateGameSession = async (req, res) => {
                     : effectiveStatus === "cancelled"
                         ? "Game Session Cancelled Successfully"
                         : "Game Session Updated Successfully",
-            booking_updated: relatedBooking !== null
+            booking_updated: bookingUpdated
         });
     } catch (error) {
         if (connection) {
@@ -1421,12 +1454,14 @@ const deleteGameSession = async (req, res) => {
             });
         }
 
-        if (rows[0].status === "active") {
+        if (
+            ["preparing", "active"].includes(rows[0].status)
+        ) {
             await connection.rollback();
 
             return res.status(409).json({
                 success: false,
-                message: "Active game session cannot be deleted. End or cancel the session first."
+                message: "Preparing or active game session cannot be deleted. Complete or cancel the session first."
             });
         }
 

@@ -86,8 +86,8 @@ const createVideoQRCode = async (req, res) => {
         const qrCode = crypto.randomBytes(32).toString("hex");
 
         // QR expires after 1 hour
-// const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
-const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+        // const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
+        const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
         const [result] = await db.query(
             `
             INSERT INTO qr_codes
@@ -109,6 +109,10 @@ const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
             ]
         );
 
+        const frontendUrl = (
+            process.env.FRONTEND_URL || "http://localhost:5173"
+        ).replace(/\/+$/, "");
+
         res.status(201).json({
             success: true,
             message: "Video QR code created successfully",
@@ -118,6 +122,7 @@ const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
                 qr_type: "video",
                 session_id,
                 video_recording_id,
+                video_url: `${frontendUrl}/video/${qrCode}`,
                 expires_at: expiresAt,
             },
         });

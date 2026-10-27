@@ -6,7 +6,8 @@ const roleMiddleware = (...allowedRoles) =>{
                 message:"Authentication required"
             });
         }
-
+//    console.log("JWT user:", req.user);
+//         console.log("Allowed roles:", allowedRoles);
         if(!allowedRoles.includes(req.user.role_name)){
             return res.status(403).json({
                 success:false,
