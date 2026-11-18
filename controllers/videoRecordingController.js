@@ -577,9 +577,9 @@ const uploadVideoToCloudinary = async (req, res) => {
 
         // Player can only upload for own session
         if (
-             !req.cameraService &&
-    req.user.role_name === "Player" &&
-    Number(sessions[0].user_id) !== Number(req.user.id)
+            !req.cameraService &&
+            req.user.role_name === "Player" &&
+            Number(sessions[0].user_id) !== Number(req.user.id)
         ) {
             return res.status(403).json({
                 success: false,
@@ -621,8 +621,8 @@ const uploadVideoToCloudinary = async (req, res) => {
 
 
         console.log("Cloudinary secure_url:", uploadResult.secure_url);
-console.log("Cloudinary public_id:", uploadResult.public_id);
-console.log("Uploaded file path:", req.file.path);
+        console.log("Cloudinary public_id:", uploadResult.public_id);
+        console.log("Uploaded file path:", req.file.path);
 
 
         // ==========================================
@@ -700,7 +700,7 @@ console.log("Uploaded file path:", req.file.path);
         });
 
     } catch (error) {
-         console.error("========== VIDEO UPLOAD ERROR ==========");
+        console.error("========== VIDEO UPLOAD ERROR ==========");
         console.error("Message:", error.message);
         console.error("Name:", error.name);
         console.error("Code:", error.code);

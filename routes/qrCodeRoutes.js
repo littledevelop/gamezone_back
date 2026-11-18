@@ -7,6 +7,9 @@ const {
     getVideoByQRCode,
     deleteExpiredVideo,
     getLatestActiveVideoQR,
+    createReelQRCode,
+    getReelByQRCode,
+    getLatestActiveReelQR,
 } = require("../controllers/qrCodeController");
 
 const authMiddleware = require("../middleware/authMiddleware");
@@ -38,6 +41,26 @@ router.delete(
     authMiddleware,
     roleMiddleware("Admin", "Staff"),
     deleteExpiredVideo
+);
+
+// Create reel QR - Admin/Staff only
+router.post(
+    "/reel",
+    authMiddleware,
+    roleMiddleware("Admin", "Staff"),
+    createReelQRCode
+);
+
+// Latest active reel QR - public
+router.get(
+    "/reel/latest-reel",
+    getLatestActiveReelQR
+);
+
+// Open reel through QR - public
+router.get(
+    "/reel/:qrCode",
+    getReelByQRCode
 );
 
 module.exports = router;

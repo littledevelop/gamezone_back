@@ -1314,7 +1314,7 @@ const updateGameSession = async (req, res) => {
         let relatedBooking = null;
         let bookingUpdated = false;
         if (
-            existing.status === "active" &&
+            ["preparing", "active"].includes(existing.status) &&
             ["completed", "cancelled"].includes(effectiveStatus)
         ) {
             // The schema has no game_sessions.booking_id. Match the
