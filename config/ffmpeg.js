@@ -1,12 +1,17 @@
 const path = require("path");
 const fs = require("fs");
 
-const ffmpegPath =
-    process.env.FFMPEG_PATH ||
-    "C:\\Users\\LATA\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-9.0.2-full_build\\bin\\ffmpeg.exe";
+const configuredPath = process.env.FFMPEG_PATH;
+const ffmpegPath = configuredPath || "ffmpeg";
 
-if (!fs.existsSync(ffmpegPath)) {
-    throw new Error(`FFmpeg executable not found: ${ffmpegPath}`);
+if (
+    configuredPath &&
+    path.isAbsolute(configuredPath) &&
+    !fs.existsSync(configuredPath)
+) {
+    throw new Error(`FFmpeg executable not found: ${configuredPath}`);
 }
 
-module.exports = path.resolve(ffmpegPath);
+module.exports = path.isAbsolute(ffmpegPath)
+    ? path.resolve(ffmpegPath)
+    : ffmpegPath;

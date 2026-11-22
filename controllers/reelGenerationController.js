@@ -366,6 +366,7 @@ const generateReel = async (req, res) => {
                 recording_ids: result.recording_ids,
 
                 photos_used: result.photos_used,
+                highlight_mode: result.highlight_mode,
 
                 cloudinary_url: result.cloudinary_url,
                 cloudinary_public_id: result.cloudinary_public_id,

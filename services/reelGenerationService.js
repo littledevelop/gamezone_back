@@ -2,6 +2,13 @@ const ffmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("../config/ffmpeg");
 const db = require("../config/db");
 const cloudinary = require("../config/cloudinary");
+const {
+    buildGameplayClipPlan,
+} = require("../utils/reelClipPlan");
+const {
+    analyzeVideoHighlights,
+    isGeminiHighlightEnabled,
+} = require("./geminiHighlightService");
 
 const fs = require("fs");
 const fsp = fs.promises;
@@ -26,7 +33,6 @@ const musicPath = path.join(
     "../assets/music/background.mp3"
 );
 
-const MAX_SECONDS_PER_RECORDING = 20;
 const MAX_PHOTOS = 5;
 
 const VIDEO_WIDTH = 1080;
@@ -49,15 +55,28 @@ const getTemplateNumber = (value, fallback, min = 0) => {
     return number;
 };
 
-const getReelSettings = (configuration = {}) => {
+const getDefaultGameplayDuration = gameName => {
+    const normalizedName = String(gameName || "").toLowerCase();
+
+    if (normalizedName.includes("bowling")) {
+        return 140;
+    }
+
+    if (
+        normalizedName.includes("laser") ||
+        /\bvr\b/.test(normalizedName)
+    ) {
+        return 39;
+    }
+
+    return 30;
+};
+
+const getReelSettings = (configuration = {}, gameName) => {
     const photos = configuration.photos || {};
     const gameplay = configuration.gameplay || {};
     const ending = configuration.ending || {};
     const branding = configuration.branding || {};
-
-    const textWords = Array.isArray(gameplay.text_words)
-        ? gameplay.text_words
-        : ["GET", "FOR", "RUN", "SHOOT", "REPEAT"];
 
     return {
         collageDuration: getTemplateNumber(
@@ -77,7 +96,7 @@ const getReelSettings = (configuration = {}) => {
 
         gameplayDuration: getTemplateNumber(
             gameplay.duration,
-            24,
+            getDefaultGameplayDuration(gameName),
             1
         ),
 
@@ -111,19 +130,8 @@ const getReelSettings = (configuration = {}) => {
         logoPosition:
             branding.logo_position || "top_right",
 
-        textWords,
-
-        textAnimation:
-            gameplay.text_animation !== false,
-
         gameplayEffect:
             gameplay.effect || "none",
-
-        endingText:
-            ending.text || "WELCOME TO ZESTOPIA",
-
-        endingSubtitle:
-            ending.subtitle || "PLAY. FIGHT. REPEAT.",
     };
 };
 
@@ -380,62 +388,102 @@ const getMediaInfo = (videoPath) => {
 };
 
 // =====================================================
-// NORMALIZE ONE RECORDING
+// CREATE A MULTI-CAMERA GAMEPLAY MONTAGE
 // =====================================================
 
-const normalizeRecording = async (
-    inputPath,
+const createGameplayMontage = async ({
+    videoPaths,
+    mediaInfos,
     outputPath,
-    tempDir
-) => {
-    const mediaInfo = await getMediaInfo(inputPath);
-
-    if (mediaInfo.duration <= 0) {
-        throw new Error(
-            `Invalid source video duration: ${inputPath}`
-        );
-    }
-
-    const duration = Math.min(
-        MAX_SECONDS_PER_RECORDING,
-        mediaInfo.duration
+    requestedDuration,
+    endingDuration,
+    highlightsBySource,
+    tempDir,
+}) => {
+    const clipPlan = buildGameplayClipPlan(
+        mediaInfos.map(info => ({
+            duration: Math.max(0, info.duration - endingDuration),
+        })),
+        requestedDuration,
+        undefined,
+        highlightsBySource
     );
 
-    let audioInputPath = null;
-
-    if (!mediaInfo.hasAudio) {
-        audioInputPath = path.join(
-            tempDir,
-            `silent_${path.basename(outputPath, ".mp4")}.wav`
-        );
-
-        await createSilentWav(audioInputPath, duration);
+    if (!clipPlan.length) {
+        return null;
     }
 
-    return new Promise((resolve, reject) => {
-        const command = ffmpeg(inputPath);
+    const command = ffmpeg();
 
-        if (audioInputPath) {
-            command.input(audioInputPath);
+    videoPaths.forEach(videoPath => command.input(videoPath));
+
+    const filters = [];
+    const videoLabels = [];
+    let nextInputIndex = videoPaths.length;
+
+    for (let index = 0; index < clipPlan.length; index++) {
+        const clip = clipPlan[index];
+        const mediaInfo = mediaInfos[clip.sourceIndex];
+        const videoLabel = `clip_video_${index}`;
+        const audioLabel = `clip_audio_${index}`;
+
+        filters.push(
+            `[${clip.sourceIndex}:v:0]` +
+            `trim=start=${clip.startTime}:duration=${clip.duration},` +
+            "setpts=PTS-STARTPTS," +
+            "scale=1080:1920:force_original_aspect_ratio=increase," +
+            "crop=1080:1920," +
+            "setsar=1," +
+            `fps=${VIDEO_FPS},` +
+            "eq=contrast=1.12:saturation=1.28," +
+            "format=yuv420p" +
+            `[${videoLabel}]`
+        );
+
+        let audioInputIndex = clip.sourceIndex;
+
+        if (!mediaInfo.hasAudio) {
+            const silentAudioPath = path.join(
+                tempDir,
+                `gameplay_silence_${index}.wav`
+            );
+
+            await createSilentWav(
+                silentAudioPath,
+                clip.duration
+            );
+
+            audioInputIndex = nextInputIndex++;
+            command.input(silentAudioPath);
         }
 
-        const audioInput = mediaInfo.hasAudio
-            ? "0:a:0"
-            : "1:a:0";
+        const audioStart = mediaInfo.hasAudio
+            ? `start=${clip.startTime}:`
+            : "";
 
+        filters.push(
+            `[${audioInputIndex}:a:0]` +
+            `atrim=${audioStart}duration=${clip.duration},` +
+            "asetpts=PTS-STARTPTS," +
+            "aresample=44100," +
+            "aformat=sample_fmts=fltp:channel_layouts=stereo" +
+            `[${audioLabel}]`
+        );
+
+        videoLabels.push(`[${videoLabel}][${audioLabel}]`);
+    }
+
+    filters.push(
+        `${videoLabels.join("")}` +
+        `concat=n=${clipPlan.length}:v=1:a=1[outv][outa]`
+    );
+
+    return new Promise((resolve, reject) => {
         command
-            .videoFilters([
-                "scale=1120:1991:force_original_aspect_ratio=increase",
-                "crop=1080:1920",
-                "setsar=1",
-                `fps=${VIDEO_FPS}`,
-                "eq=contrast=1.06:saturation=1.12",
-                "format=yuv420p",
-            ])
+            .complexFilter(filters)
             .outputOptions([
-                "-map 0:v:0",
-                `-map ${audioInput}`,
-                "-t", String(duration),
+                "-map [outv]",
+                "-map [outa]",
                 "-c:v libx264",
                 "-preset veryfast",
                 "-crf 23",
@@ -444,15 +492,35 @@ const normalizeRecording = async (
                 "-ar 44100",
                 "-ac 2",
                 "-b:a 128k",
-                "-avoid_negative_ts make_zero",
                 "-movflags +faststart",
             ])
             .output(outputPath)
             .on("start", commandLine => {
-                console.log("Normalize command:", commandLine);
+                console.log("Gameplay montage command:", commandLine);
             })
-            .on("end", resolve)
-            .on("error", reject)
+            .on("end", async () => {
+                try {
+                    const mediaInfo = await getMediaInfo(outputPath);
+
+                    resolve({
+                        ...mediaInfo,
+                        highlightsUsed: clipPlan.some(
+                            clip => clip.selectionType === "ai"
+                        ),
+                    });
+                } catch (error) {
+                    reject(error);
+                }
+            })
+            .on("error", (error, stdout, stderr) => {
+                console.error("Gameplay montage failed:", error.message);
+
+                if (stderr) {
+                    console.error(stderr);
+                }
+
+                reject(error);
+            })
             .run();
     });
 };
@@ -512,49 +580,7 @@ const concatRecordings = async (
     });
 };
 // =====================================================
-// FIND A FONT FOR ANIMATED TEXT
-// =====================================================
-
-const getFontPath = () => {
-    const candidates = [
-        process.env.REEL_FONT_FILE,
-        "C:/Windows/Fonts/arialbd.ttf",
-        "C:/Windows/Fonts/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-    ].filter(Boolean);
-
-    const font = candidates.find(candidate =>
-        fs.existsSync(candidate)
-    );
-
-    if (!font) {
-        console.warn(
-            "No supported font found. Animated text will be skipped."
-        );
-
-        return null;
-    }
-
-    return font
-        .replace(/\\/g, "/")
-        .replace(/:/g, "\\:");
-};
-
-const escapeDrawtext = (value) => {
-    return String(value)
-        .replace(/\\/g, "\\\\")
-        .replace(/:/g, "\\:")
-        .replace(/'/g, "\\'")
-        .replace(/%/g, "\\%")
-        .replace(/\[/g, "\\[")
-        .replace(/\]/g, "\\]")
-        .replace(/,/g, "\\,");
-};
-
-// =====================================================
 // CREATE GAMEPLAY TIMELINE SEGMENT
-// Adds animated words over gameplay.
 // =====================================================
 
 const createGameplaySegment = async (
@@ -562,16 +588,9 @@ const createGameplaySegment = async (
     outputPath,
     startTime,
     duration,
-    settings = {},
-    includeText = true
+    settings = {}
 ) => {
     if (duration <= 0) return;
-
-    const words = Array.isArray(settings.textWords)
-        ? settings.textWords.filter(Boolean)
-        : [];
-
-    const fontPath = getFontPath();
 
     const filters = [
         "scale=1080:1920:force_original_aspect_ratio=increase",
@@ -581,46 +600,6 @@ const createGameplaySegment = async (
         "eq=contrast=1.08:saturation=1.15",
         "format=yuv420p",
     ];
-
-    if (
-        includeText &&
-        settings.textAnimation !== false &&
-        fontPath &&
-        words.length
-    ) {
-        const wordDuration = Math.max(
-            0.8,
-            duration / words.length
-        );
-
-        words.forEach((word, index) => {
-            const start = index * wordDuration;
-            const end = Math.min(
-                duration,
-                start + wordDuration
-            );
-
-            if (start >= duration) return;
-
-            const safeWord = escapeDrawtext(word);
-
-            filters.push(
-                `drawtext=fontfile='${fontPath}':` +
-                `text='${safeWord}':` +
-                "fontcolor=0x65E51B:" +
-                "fontsize=100:" +
-                "borderw=5:" +
-                "bordercolor=black@0.8:" +
-                "shadowcolor=black@0.8:" +
-                "shadowx=5:" +
-                "shadowy=5:" +
-                "x=(w-text_w)/2:" +
-                `y='h*0.40-25*sin((t-${start})*3)':` +
-                `alpha='if(lt(t,${start}),0,if(lt(t,${start + 0.25}),(t-${start})/0.25,if(lt(t,${end - 0.2}),1,if(lt(t,${end}),(${end}-t)/0.2,0))))':` +
-                `enable='between(t,${start},${end})'`
-            );
-        });
-    }
 
     return new Promise((resolve, reject) => {
         ffmpeg(videoPath)
@@ -841,11 +820,26 @@ const createEndingSegment = async (
     outputPath,
     startTime,
     duration,
-    settings = {}
+    settings = {},
+    tempDir
 ) => {
     if (duration <= 0) return;
 
-    const fontPath = getFontPath();
+    const mediaInfo = await getMediaInfo(videoPath);
+    const command = ffmpeg(videoPath)
+        .inputOptions(["-ss", String(startTime)]);
+    let audioInput = "0:a:0";
+
+    if (!mediaInfo.hasAudio) {
+        const silentAudioPath = path.join(
+            tempDir,
+            "ending_silence.wav"
+        );
+
+        await createSilentWav(silentAudioPath, duration);
+        command.input(silentAudioPath);
+        audioInput = "1:a:0";
+    }
 
     const filters = [
         "scale=1080:1920:force_original_aspect_ratio=increase",
@@ -856,43 +850,8 @@ const createEndingSegment = async (
         "format=yuv420p",
     ];
 
-    if (fontPath) {
-        const mainText = escapeDrawtext(
-            settings.endingText || "WELCOME TO ZESTOPIA"
-        );
-
-        const subtitle = escapeDrawtext(
-            settings.endingSubtitle || "PLAY. FIGHT. REPEAT."
-        );
-
-        filters.push(
-            `drawtext=fontfile='${fontPath}':` +
-            `text='${mainText}':` +
-            "fontcolor=0x65E51B:" +
-            "fontsize=68:" +
-            "borderw=4:" +
-            "bordercolor=black:" +
-            "x=(w-text_w)/2:" +
-            "y=h*0.36:" +
-            "shadowcolor=black@0.8:" +
-            "shadowx=4:shadowy=4"
-        );
-
-        filters.push(
-            `drawtext=fontfile='${fontPath}':` +
-            `text='${subtitle}':` +
-            "fontcolor=white:" +
-            "fontsize=48:" +
-            "borderw=3:" +
-            "bordercolor=black:" +
-            "x=(w-text_w)/2:" +
-            "y=h*0.43"
-        );
-    }
-
     return new Promise((resolve, reject) => {
-        ffmpeg(videoPath)
-            .seekInput(startTime)
+        command
             .duration(duration)
             .videoFilters(filters)
             .audioFilters([
@@ -900,7 +859,7 @@ const createEndingSegment = async (
             ])
             .outputOptions([
                 "-map 0:v:0",
-                "-map 0:a:0",
+                `-map ${audioInput}`,
                 "-c:v libx264",
                 "-preset veryfast",
                 "-crf 23",
@@ -941,29 +900,40 @@ const createEndingSegment = async (
 // =====================================================
 
 const createVerticalReel = async ({
-    videoPath,
+    videoPaths,
+    gameName,
     photoPaths,
     outputPath,
     tempDir,
     configuration = {},
 }) => {
-    const settings = getReelSettings(configuration);
+    const settings = getReelSettings(configuration, gameName);
 
-    const mediaInfo = await getMediaInfo(videoPath);
+    const mediaInfos = await Promise.all(
+        videoPaths.map(getMediaInfo)
+    );
+
+    const endingVideoIndex = mediaInfos.reduce(
+        (longestIndex, mediaInfo, index, allMediaInfos) =>
+            mediaInfo.duration > allMediaInfos[longestIndex].duration
+                ? index
+                : longestIndex,
+        0
+    );
+
+    const availableGameplay = mediaInfos.reduce(
+        (longestDuration, mediaInfo) =>
+            Math.max(longestDuration, mediaInfo.duration),
+        0
+    );
 
     console.log("=================================");
     console.log("STARTING VERTICAL REEL");
-    console.log("GAMEPLAY VIDEO:", videoPath);
-    console.log("GAMEPLAY INFO:", mediaInfo);
+    console.log("GAMEPLAY VIDEOS:", videoPaths);
+    console.log("GAMEPLAY INFO:", mediaInfos);
     console.log("=================================");
 
-    if (!mediaInfo.hasAudio) {
-        throw new Error(
-            "Combined gameplay video does not contain audio."
-        );
-    }
-
-    if (mediaInfo.duration <= 0) {
+    if (availableGameplay <= 0) {
         throw new Error("Invalid gameplay video duration.");
     }
 
@@ -972,34 +942,22 @@ const createVerticalReel = async ({
         settings.maxPhotos
     );
 
-    const availableGameplay = mediaInfo.duration;
-
     // Reserve the final footage for the branded ending.
     const endingDuration = Math.min(
         settings.endingDuration,
         availableGameplay
     );
 
-    const mainGameplayDuration = Math.min(
+    const requestedMainDuration = Math.min(
         settings.gameplayDuration,
         Math.max(0, availableGameplay - endingDuration)
     );
 
-    // If the source is shorter than the requested ending,
-    // use the available footage as the ending.
-    const actualEndingDuration =
-        mainGameplayDuration > 0
-            ? endingDuration
-            : availableGameplay;
-
-    const actualMainDuration =
-        mainGameplayDuration > 0
-            ? mainGameplayDuration
-            : 0;
-
     const timelinePaths = [];
 
-    let gameplayPosition = 0;
+    let actualMainDuration = 0;
+    let actualEndingDuration = endingDuration;
+    let highlightMode = "sampled";
 
     // -------------------------------------------------
     // 1. ANIMATED PHOTO COLLAGE FIRST
@@ -1028,27 +986,110 @@ const createVerticalReel = async ({
     }
 
     // -------------------------------------------------
-    // 2. MAIN GAMEPLAY WITH ANIMATED WORDS
+    // 2. MAIN GAMEPLAY MONTAGE WITH ANIMATED WORDS
     // -------------------------------------------------
 
-    if (actualMainDuration > 0) {
-        const gameplayPath = path.join(
+    if (requestedMainDuration > 0) {
+        const montagePath = path.join(
             tempDir,
-            "timeline_main_gameplay.mp4"
+            "gameplay_montage.mp4"
         );
 
-        await createGameplaySegment(
-            videoPath,
-            gameplayPath,
-            gameplayPosition,
-            actualMainDuration,
-            settings,
-            true
-        );
+        let highlightsBySource = null;
 
-        timelinePaths.push(gameplayPath);
+        if (isGeminiHighlightEnabled()) {
+            const highlightsPerCamera = Math.max(
+                3,
+                Math.min(
+                    20,
+                    Math.ceil(
+                        requestedMainDuration /
+                        5 /
+                        videoPaths.length
+                    ) + 2
+                )
+            );
 
-        gameplayPosition += actualMainDuration;
+            try {
+                highlightsBySource = [];
+
+                for (let index = 0; index < videoPaths.length; index++) {
+                    const analysisDuration = Math.max(
+                        0,
+                        mediaInfos[index].duration - endingDuration
+                    );
+
+                    if (analysisDuration <= 0) {
+                        highlightsBySource.push([]);
+                        continue;
+                    }
+
+                    highlightsBySource.push(
+                        await analyzeVideoHighlights(
+                            videoPaths[index],
+                            analysisDuration,
+                            highlightsPerCamera
+                        )
+                    );
+                }
+            } catch (error) {
+                console.error(
+                    "Gemini highlight selection unavailable; using sampled clips:",
+                    error.message
+                );
+
+                highlightsBySource = null;
+            }
+        } else if (process.env.GEMINI_API_KEY) {
+            console.warn(
+                "Gemini video analysis is disabled. Set " +
+                "GEMINI_ALLOW_CUSTOMER_VIDEO=true only after obtaining " +
+                "customer consent."
+            );
+        } else {
+            console.info(
+                "GEMINI_API_KEY is not configured; using sampled gameplay clips."
+            );
+        }
+
+        const montageInfo = await createGameplayMontage({
+            videoPaths,
+            mediaInfos,
+            outputPath: montagePath,
+            requestedDuration: requestedMainDuration,
+            endingDuration,
+            highlightsBySource,
+            tempDir,
+        });
+
+        if (montageInfo?.duration > 0) {
+            highlightMode = montageInfo.highlightsUsed
+                ? "gemini"
+                : "sampled";
+
+            const gameplayPath = path.join(
+                tempDir,
+                "timeline_main_gameplay.mp4"
+            );
+
+            actualMainDuration = montageInfo.duration;
+
+            await createGameplaySegment(
+                montagePath,
+                gameplayPath,
+                0,
+                actualMainDuration,
+                settings
+            );
+
+            timelinePaths.push(gameplayPath);
+        }
+    }
+
+    // If no footage is available before the ending, use the full source
+    // duration for the branded ending instead of emitting an empty reel.
+    if (actualMainDuration === 0) {
+        actualEndingDuration = availableGameplay;
     }
 
     // -------------------------------------------------
@@ -1061,17 +1102,17 @@ const createVerticalReel = async ({
             "timeline_action_ending.mp4"
         );
 
-        const endingStart = Math.max(
-            0,
-            availableGameplay - actualEndingDuration
-        );
-
         await createEndingSegment(
-            videoPath,
+            videoPaths[endingVideoIndex],
             endingPath,
-            endingStart,
+            Math.max(
+                0,
+                mediaInfos[endingVideoIndex].duration -
+                    actualEndingDuration
+            ),
             actualEndingDuration,
-            settings
+            settings,
+            tempDir
         );
 
         timelinePaths.push(endingPath);
@@ -1111,7 +1152,7 @@ const createVerticalReel = async ({
     console.log("=================================");
     console.log("REEL TIMELINE CREATED");
     console.log("Photos used:", selectedPhotos.length);
-    console.log("Main gameplay:", actualMainDuration);
+    console.log("Main gameplay montage:", actualMainDuration);
     console.log("Ending gameplay:", actualEndingDuration);
     console.log("Total duration:", totalDuration);
     console.log("=================================");
@@ -1202,7 +1243,8 @@ const createVerticalReel = async ({
             filters.push(
                 `[basev][logo]overlay=` +
                 `x=${logoX}:y=${logoY}:` +
-                "eof_action=repeat[outv]"
+                "eof_action=repeat:" +
+                `enable='gte(t,${Math.max(0, totalDuration - actualEndingDuration)})'[outv]`
             );
 
             finalVideoLabel = "outv";
@@ -1278,7 +1320,9 @@ const createVerticalReel = async ({
             })
             .on("end", () => {
                 console.log("FINAL REEL CREATED:", outputPath);
-                resolve();
+                resolve({
+                    highlightMode,
+                });
             })
             .on("error", (error, stdout, stderr) => {
                 console.error(
@@ -1340,7 +1384,10 @@ const generateReelForSession = async (
             numericSessionId
         );
 
-        const settings = getReelSettings(configuration);
+        const settings = getReelSettings(
+            configuration,
+            session.game_name
+        );
 
         const selectedPhotos = photos.slice(
             0,
@@ -1356,9 +1403,9 @@ const generateReelForSession = async (
             path.join(os.tmpdir(), "zestopia-session-reel-")
         );
 
-        // 4. DOWNLOAD AND NORMALIZE RECORDINGS
+        // 4. DOWNLOAD THE CAMERA RECORDINGS
 
-        const normalizedPaths = [];
+        const sourcePaths = [];
 
         for (let i = 0; i < recordings.length; i++) {
             const recording = recordings[i];
@@ -1366,11 +1413,6 @@ const generateReelForSession = async (
             const originalPath = path.join(
                 tempDir,
                 `source_${i + 1}.mp4`
-            );
-
-            const normalizedPath = path.join(
-                tempDir,
-                `normalized_${i + 1}.mp4`
             );
 
             console.log(
@@ -1383,27 +1425,8 @@ const generateReelForSession = async (
                 originalPath
             );
 
-            await normalizeRecording(
-                originalPath,
-                normalizedPath,
-                tempDir
-            );
-
-            normalizedPaths.push(normalizedPath);
+            sourcePaths.push(originalPath);
         }
-
-        // 5. COMBINE RECORDINGS
-
-        const combinedVideoPath = path.join(
-            tempDir,
-            "combined_gameplay.mp4"
-        );
-
-        await concatRecordings(
-            normalizedPaths,
-            combinedVideoPath,
-            tempDir
-        );
 
         // 6. DOWNLOAD SESSION PHOTOS
 
@@ -1434,8 +1457,9 @@ const generateReelForSession = async (
             `zestopia_session_${numericSessionId}.mp4`
         );
 
-        await createVerticalReel({
-            videoPath: combinedVideoPath,
+        const reelComposition = await createVerticalReel({
+            videoPaths: sourcePaths,
+            gameName: session.game_name,
             photoPaths,
             outputPath,
             tempDir,
@@ -1502,6 +1526,9 @@ const generateReelForSession = async (
             duration_seconds:
                 uploadResult.duration || outputInfo.duration,
 
+            highlight_mode:
+                reelComposition?.highlightMode || "sampled",
+
             resource_type: uploadResult.resource_type,
         };
 
@@ -1556,4 +1583,7 @@ module.exports = {
     verifyFFmpeg,
     generateReelForRecording,
     generateReelForSession,
+    createGameplayMontage,
+    createVerticalReel,
+    getMediaInfo,
 };

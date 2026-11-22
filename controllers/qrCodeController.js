@@ -2,6 +2,9 @@
 const crypto = require("crypto");
 const db = require("../config/db");
 const cloudinary = require("../config/cloudinary");
+const {
+    getReelExpirationDate,
+} = require("../utils/reelRetention");
 
 // =====================================================
 // CREATE VIDEO QR CODE
@@ -98,9 +101,7 @@ const createVideoQRCode = async (req, res) => {
 
         const qrCode = crypto.randomBytes(32).toString("hex");
 
-        const expiresAt = new Date(
-            Date.now() + 60 * 60 * 1000
-        );
+        const expiresAt = getReelExpirationDate();
 
         const [result] = await db.query(
             `
@@ -533,7 +534,7 @@ const createReelQRCode = async (req, res) => {
         }
 
         const qrCode = crypto.randomBytes(32).toString("hex");
-        const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+        const expiresAt = getReelExpirationDate();
 
         const [result] = await db.query(
             `

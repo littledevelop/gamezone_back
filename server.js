@@ -101,10 +101,10 @@ async function startServer(){
         // Run cleanup once when server starts
         cleanupExpiredVideos();
 
-        // Run cleanup every 5 minutes
+        // Check temporary reel and video QR assets every minute.
         setInterval(
             cleanupExpiredVideos,
-            5 * 60 * 1000
+            60 * 1000
         );
 
     }catch(error){
