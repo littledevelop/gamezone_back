@@ -156,29 +156,69 @@ const verifyFFmpeg = () => {
 // DOWNLOAD FILE
 // =====================================================
 
+const DOWNLOAD_MAX_ATTEMPTS = 3;
+const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+const RETRYABLE_DOWNLOAD_CODES = new Set([
+    "ECONNABORTED",
+    "ECONNRESET",
+    "EAI_AGAIN",
+    "ETIMEDOUT",
+]);
+
+const isRetryableDownloadError = error =>
+    RETRYABLE_DOWNLOAD_CODES.has(error.code) ||
+    error.response?.status === 429 ||
+    error.response?.status >= 500;
+
 async function downloadFile(url, outputPath) {
-    try {
-        console.log("Downloading file:", url);
+    for (let attempt = 1; attempt <= DOWNLOAD_MAX_ATTEMPTS; attempt++) {
+        await fsp.rm(outputPath, { force: true });
 
-        const response = await axios({
-            method: "GET",
-            url,
-            responseType: "stream",
-            timeout: 120000,
-        });
+        try {
+            console.log(
+                `Downloading file (attempt ${attempt}/${DOWNLOAD_MAX_ATTEMPTS}):`,
+                url
+            );
 
-        await pipeline(
-            response.data,
-            fs.createWriteStream(outputPath)
-        );
+            const response = await axios({
+                method: "GET",
+                url,
+                responseType: "stream",
+                timeout: DOWNLOAD_TIMEOUT_MS,
+            });
 
-        console.log("Download completed:", outputPath);
-    } catch (error) {
-        console.error("DOWNLOAD FAILED:", error.message);
-        console.error("URL:", url);
-        console.error("HTTP STATUS:", error.response?.status);
+            await pipeline(
+                response.data,
+                fs.createWriteStream(outputPath)
+            );
 
-        throw error;
+            console.log("Download completed:", outputPath);
+            return;
+        } catch (error) {
+            error.response?.data?.destroy?.();
+
+            if (
+                attempt < DOWNLOAD_MAX_ATTEMPTS &&
+                isRetryableDownloadError(error)
+            ) {
+                const delayMs = 1000 * attempt;
+
+                console.warn(
+                    `Download attempt ${attempt} failed (${error.code || error.message}); retrying in ${delayMs}ms.`
+                );
+
+                await new Promise(resolve =>
+                    setTimeout(resolve, delayMs)
+                );
+                continue;
+            }
+
+            console.error("DOWNLOAD FAILED:", error.message);
+            console.error("URL:", url);
+            console.error("HTTP STATUS:", error.response?.status);
+
+            throw error;
+        }
     }
 }
 
@@ -1581,6 +1621,7 @@ const generateReelForRecording = async (recordingId) => {
 
 module.exports = {
     verifyFFmpeg,
+    downloadFile,
     generateReelForRecording,
     generateReelForSession,
     createGameplayMontage,
